@@ -6,6 +6,10 @@ data/processed/*
 *.csv
 *.zip
 
+# Excepción: los resultados de los experimentos sí se versionan como evidencia
+!results/*.csv
+!results/*.json
+
 # Entornos y cachés de Python
 __pycache__/
 *.pyc

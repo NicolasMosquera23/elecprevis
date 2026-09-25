@@ -6,6 +6,7 @@ información posterior al instante que se predice (data leakage temporal).
 Por eso todo se arma con .shift() hacia atrás y con rolling() sin centrar.
 """
 
+import numpy as np
 import pandas as pd
 
 TARGET = "Global_active_power"
@@ -23,6 +24,14 @@ def add_calendar_features(df: pd.DataFrame) -> pd.DataFrame:
     df["dayofweek"] = df.index.dayofweek  # 0=lunes
     df["is_weekend"] = (df["dayofweek"] >= 5).astype(int)
     df["month"] = df.index.month
+
+    # Codificación cíclica: la hora y el mes son ciclos, no escalas lineales.
+    # Sin esto, el modelo ve las 23:00 lejos de las 00:00 y diciembre lejos
+    # de enero, lo que perjudica a los modelos lineales y a la LSTM.
+    df["hour_sin"] = np.sin(2 * np.pi * df["hour"] / 24)
+    df["hour_cos"] = np.cos(2 * np.pi * df["hour"] / 24)
+    df["month_sin"] = np.sin(2 * np.pi * (df["month"] - 1) / 12)
+    df["month_cos"] = np.cos(2 * np.pi * (df["month"] - 1) / 12)
     return df
 
 

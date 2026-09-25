@@ -5,14 +5,18 @@ Pasos que sigue este módulo, en orden:
     1. Carga del .txt separado por ';', con '?' como marcador de nulo.
     2. Combinación de Date + Time en un índice datetime.
     3. Optimización de memoria (downcast numérico).
-    4. Imputación de nulos por interpolación temporal (no por mediana global:
-       es una serie de tiempo, no un dataset tabular independiente).
+    4. Imputación causal de nulos: cada hueco se rellena con la última
+       observación válida (forward fill). No se usa mediana global porque es
+       una serie de tiempo, y no se usa interpolación centrada porque
+       necesitaría el valor siguiente, es decir, información futura.
     5. Remuestreo de 1 minuto a 30 minutos.
     6. Reporte de outliers vía IQR (solo diagnóstico, no se recortan valores
        reales de consumo sin justificar por qué).
 
-Nunca se usa información futura en estos pasos: cada operación mira hacia
-atrás (interpolación, resample), no hacia adelante.
+Ningún paso mira hacia adelante: el forward fill solo propaga valores ya
+observados y el remuestreo promedia dentro de la ventana que abre en t. Cada
+ventana de 30 minutos queda etiquetada por su inicio, así que la fila t
+depende únicamente de minutos en [t, t+30).
 """
 
 from pathlib import Path
@@ -64,12 +68,14 @@ def report_missing(df: pd.DataFrame) -> pd.Series:
 
 def impute_missing(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Interpolación temporal: usa los puntos vecinos en el tiempo para rellenar
-    huecos. Preferible a una mediana global porque respeta la continuidad
-    de la serie (un hueco a las 3am no debería rellenarse con el promedio
-    del día completo).
+    Forward fill: cada hueco se rellena con la última observación válida.
+
+    Se evita la interpolación centrada (limit_direction="both") porque para
+    rellenar un hueco necesita también el valor siguiente, y en un pronóstico
+    a 30 minutos esa información todavía no existe cuando se construye la
+    variable. El forward fill solo propaga lo ya observado.
     """
-    df[NUMERIC_COLS] = df[NUMERIC_COLS].interpolate(method="time", limit_direction="both")
+    df[NUMERIC_COLS] = df[NUMERIC_COLS].ffill()
     return df
 
 
@@ -85,10 +91,11 @@ def report_outliers_iqr(df: pd.DataFrame, cols=NUMERIC_COLS) -> pd.DataFrame:
         iqr = q3 - q1
         lower, upper = q1 - 1.5 * iqr, q3 + 1.5 * iqr
         n_out = ((df[col] < lower) | (df[col] > upper)).sum()
+        n_valid = int(df[col].notna().sum())
         rows.append(
             {"columna": col, "q1": q1, "q3": q3, "limite_inf": lower,
              "limite_sup": upper, "n_outliers": n_out,
-             "pct_outliers": round(n_out / len(df) * 100, 3)}
+             "pct_outliers": round(n_out / n_valid * 100, 3) if n_valid else 0.0}
         )
     return pd.DataFrame(rows)
 
@@ -98,9 +105,9 @@ def resample_30min(df: pd.DataFrame) -> pd.DataFrame:
     return df[NUMERIC_COLS].resample("30min").mean()
 
 
-def run_pipeline(save: bool = True) -> pd.DataFrame:
+def run_pipeline(save: bool = True, raw_path: Path = RAW_PATH) -> pd.DataFrame:
     print("Cargando datos crudos...")
-    df = load_raw()
+    df = load_raw(raw_path)
     print(f"  {len(df):,} filas cargadas (resolución 1 min).")
 
     df = optimize_memory(df)
@@ -109,11 +116,16 @@ def run_pipeline(save: bool = True) -> pd.DataFrame:
     print("Nulos por columna (%):")
     print(missing[missing > 0])
 
-    df = impute_missing(df)
-
+    # El diagnóstico de outliers se hace sobre los datos crudos: así no se
+    # mezclan valores imputados con valores realmente medidos.
     outliers = report_outliers_iqr(df)
-    print("\nOutliers detectados (IQR, solo diagnóstico):")
+    print("\nOutliers sobre datos crudos (IQR, solo diagnóstico):")
     print(outliers.to_string(index=False))
+
+    nulos_antes = int(df[NUMERIC_COLS].isna().sum().sum())
+    df = impute_missing(df)
+    pct_imp = nulos_antes / (len(df) * len(NUMERIC_COLS)) * 100
+    print(f"\nValores imputados por forward fill: {nulos_antes:,} ({pct_imp:.3f}% de las celdas)")
 
     df_30min = resample_30min(df)
     print(f"\nRemuestreo a 30 min: {len(df_30min):,} intervalos.")
