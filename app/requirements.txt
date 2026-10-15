@@ -1,0 +1,10 @@
+# Dependencias de la app (sin TensorFlow: la LSTM se evalúa con NumPy).
+# Streamlit Community Cloud lee este archivo porque está junto al punto de entrada.
+streamlit==1.66.0
+pandas==3.0.5
+numpy==2.5.3
+pyarrow==26.0.0
+plotly==7.1.0
+xgboost-cpu==3.4.1
+scikit-learn==1.9.1
+joblib==1.6.0
