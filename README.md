@@ -31,6 +31,7 @@ elecprevis/
 │   ├── preprocessing.py    # limpieza, imputación, remuestreo a 30 min
 │   ├── features.py         # variables temporales y rezagadas sin leakage
 │   └── models.py           # entrenamiento y comparación de los 4 modelos
+├── app/                    # aplicación Streamlit (Entregable 2, Parte 5), ver app/README.md
 ├── docs/
 │   └── Entregable_1.pdf
 ├── requirements.txt
@@ -46,6 +47,13 @@ pip install -r requirements.txt
 
 python src/download_data.py      # descarga data/raw/household_power_consumption.txt
 python src/preprocessing.py      # genera data/processed/power_30min.csv
+```
+
+Para abrir la aplicación (no necesita descargar el dataset):
+
+```bash
+pip install -r app/requirements.txt
+streamlit run app/streamlit_app.py
 ```
 
 El dataset no se sube al repo (pesa varios cientos de MB): cada integrante lo descarga

@@ -28,3 +28,6 @@ models/*.h5
 .DS_Store
 .vscode/
 .idea/
+
+# App: el random forest pesa ~160 MB (límite de GitHub: 100 MB); se regenera con app/train_export.py
+app/artifacts/random_forest.joblib

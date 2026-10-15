@@ -69,24 +69,32 @@ def split_xy(df: pd.DataFrame, target_col: str = "y"):
 # --------------------------------------------------------------------------
 # Modelos
 # --------------------------------------------------------------------------
-def fit_linear_regression(X_train, y_train, log_target: bool = True):
+# Modelo matemático §6.1 y Parte 2 §3.1: la rama lineal excluye la intensidad
+# global, redundante con la potencia activa (r = 0,999).
+LINEAR_EXCLUDE = ("Global_intensity",)
+
+
+def fit_linear_regression(X_train, y_train, log_target: bool = True,
+                          exclude=LINEAR_EXCLUDE):
     """
     Ajusta la regresión lineal sobre log(1 + y) cuando log_target es True.
 
-    Devuelve (modelo, escalador, log_target). La transformación se justifica por
-    la asimetría del objetivo; al invertir la predicción con expm1 las métricas
-    vuelven a kW y siguen siendo comparables con las de los otros modelos.
+    Devuelve (modelo, escalador, log_target, columnas). La transformación se
+    justifica por la asimetría del objetivo; al invertir la predicción con expm1
+    las métricas vuelven a kW y siguen siendo comparables con las de los otros
+    modelos. Las columnas de `exclude` se retiran por multicolinealidad.
     """
-    scaler = StandardScaler().fit(X_train)
+    cols = [c for c in X_train.columns if c not in set(exclude)]
+    scaler = StandardScaler().fit(X_train[cols])
     y_fit = np.log1p(y_train) if log_target else y_train
-    model = LinearRegression().fit(scaler.transform(X_train), y_fit)
-    return model, scaler, log_target
+    model = LinearRegression().fit(scaler.transform(X_train[cols]), y_fit)
+    return model, scaler, log_target, cols
 
 
 def predict_linear(bundle, X) -> np.ndarray:
     """Predice con el paquete que devuelve fit_linear_regression."""
-    model, scaler, log_target = bundle
-    pred = model.predict(scaler.transform(X))
+    model, scaler, log_target, cols = bundle
+    pred = model.predict(scaler.transform(X[cols]))
     return np.expm1(pred) if log_target else pred
 
 
@@ -126,10 +134,15 @@ def build_lstm_sequences(X: np.ndarray, y: np.ndarray, n_steps: int = 48):
     Se aplica por separado a entrenamiento y a prueba: armar las ventanas sobre
     el conjunto completo y después partir mezclaría información de las dos
     mitades en la frontera.
+
+    La ventana de la muestra i termina en la fila i (incluida): la fila i ya
+    contiene la información hasta t e y[i] es el consumo en t+1, así que el
+    horizonte queda en un paso, igual que en los otros tres modelos. Si la
+    ventana terminara en i−1, la LSTM estaría prediciendo a dos pasos.
     """
     Xs, ys = [], []
-    for i in range(n_steps, len(X)):
-        Xs.append(X[i - n_steps : i])
+    for i in range(n_steps - 1, len(X)):
+        Xs.append(X[i - n_steps + 1 : i + 1])
         ys.append(y[i])
     return np.array(Xs), np.array(ys)
 
