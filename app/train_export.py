@@ -150,11 +150,16 @@ def main():
             log(f"walk-forward {nombre}")
             wf[nombre] = md.walk_forward_evaluate(f, X_tr, y_tr, n_splits=args.cortes).round(4).to_dict(orient="records")
 
+    # Referencia ingenua (persistencia): ŷ_{t+1} = y_t, sin modelo.
+    persistencia = serie["Global_active_power"].astype("float64").reindex(pred["origen"]).to_numpy()
+    referencia = core.metricas(pred["Real"], persistencia)
+
     lin = json.loads((ART / "lineal.json").read_text())
     resultados = {
         "dataset": {"filas": int(len(sup)), "train": int(len(tr)), "prueba": int(len(te)),
                     "inicio_prueba": str(te.index[0]), "fin_prueba": str(te.index[-1])},
         "metricas_prueba": metricas,
+        "referencia_persistencia": referencia,
         "walk_forward": wf,
         "importancia": {"Random Forest": imp_rf, "XGBoost": imp_xgb,
                         "Regresión lineal": dict(zip(lin["features"], lin["coef"]))},

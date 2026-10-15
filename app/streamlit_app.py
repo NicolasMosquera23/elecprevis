@@ -70,11 +70,9 @@ P = predicciones()
 R = resultados()
 INI_PRUEBA = pd.Timestamp(R["dataset"]["inicio_prueba"])
 
-ETIQ_PREC = {
-    "energetica": "Precisión energética",
-    "diaria": "Precisión diaria",
-    "intervalo": "Precisión por intervalo",
-}[core.PRECISION_PRINCIPAL]
+ETIQ_PREC = "Precisión ±1 kW"
+TOL = fmt(core.TOLERANCIA_KW, 1)
+REF = R.get("referencia_persistencia", {})
 
 FUNCIONALIDADES = [
     ("Histórico", "F1. Serie histórica interactiva con rango de fechas y resolución ajustable"),
@@ -83,7 +81,7 @@ FUNCIONALIDADES = [
     ("Predicción", "F4. Predicción del siguiente intervalo (30 min) con los 4 modelos"),
     ("Predicción", "F5. Pronóstico encadenado de 24 h con selector de modelo"),
     ("Predicción", "F6. Calculadora: predicción a partir de condiciones ingresadas a mano"),
-    ("Comparación", "F7. Tabla de métricas de los 4 modelos (MAE, MSE, RMSE, R², sMAPE, precisión)"),
+    ("Comparación", "F7. Tabla de métricas de los 4 modelos (MAE, MSE, RMSE, R², sMAPE, precisión por tolerancia)"),
     ("Comparación", "F8. Real vs. predicho y error por hora del día en el periodo de prueba"),
     ("Comparación", "F9. Estabilidad por cortes de la validación de ventana expansiva"),
     ("Escenarios", "F10. Desglose del consumo por grupo de carga (submediciones)"),
@@ -150,9 +148,9 @@ if pagina == "Inicio":
     st.dataframe(pd.DataFrame(FUNCIONALIDADES, columns=["Sección", "Funcionalidad"]),
                  hide_index=True, use_container_width=True)
     st.info(
-        f"**Sobre la precisión.** La métrica principal mostrada es la *{ETIQ_PREC.lower()}*. "
-        "En la sección *Comparación de modelos* se reportan también las otras lecturas de precisión y "
-        "las métricas del modelo matemático (MAE, MSE, RMSE, R², sMAPE)."
+        f"**Sobre la precisión.** Como el modelo predice un número (kW) y no una clase, la precisión se mide "
+        f"por tolerancia: el porcentaje de predicciones que quedan a ±{TOL} kW o menos del valor real. "
+        "La explicación completa está en *Comparación de modelos*."
     )
 
 # ==========================================================================
@@ -351,19 +349,24 @@ elif pagina == "Comparación de modelos":
         "RMSE (kW)": tabla["RMSE"].map(lambda v: fmt(v, 4)),
         "R²": tabla["R2"].map(lambda v: fmt(v, 4)),
         "sMAPE (%)": tabla["sMAPE"].map(lambda v: fmt(v, 2)),
-        "Precisión energética (%)": tabla["Precisión energética"].map(lambda v: fmt(v, 2)),
-        "Precisión diaria (%)": tabla["Precisión diaria"].map(lambda v: fmt(v, 2)),
-        "Precisión por intervalo (%)": tabla["Precisión por intervalo"].map(lambda v: fmt(v, 2)),
+        f"Precisión ±{TOL} kW (%)": tabla["Precisión ±1 kW"].map(lambda v: fmt(v, 2)),
+        "Error P95 (kW)": tabla["Error P95"].map(lambda v: fmt(v, 3)),
     })
     st.dataframe(mostrar, use_container_width=True)
-    with st.expander("¿Qué significa cada precisión?"):
+    with st.expander("¿Por qué precisión por tolerancia y no TP / (TP + FP)?"):
+        ref_txt = (f" Como referencia, predecir que en la próxima media hora se consume lo mismo que ahora, "
+                   f"sin ningún modelo, alcanza {fmt(REF['Precisión ±1 kW'], 1)} % con la misma tolerancia."
+                   if REF else "")
         st.markdown(
-            "- **Precisión energética** = 1 − |Σŷ − Σy| / Σy. Qué tan bien acierta el modelo la energía total "
-            "consumida en el periodo de prueba.\n"
-            "- **Precisión diaria** = 100 − sMAPE calculado sobre la energía de cada día (kWh/día).\n"
-            "- **Precisión por intervalo** = 100 − sMAPE intervalo a intervalo. Es la lectura más exigente, "
-            "porque un error de 0,3 kW pesa mucho en la madrugada.\n\n"
-            "MAE, MSE, RMSE, R² y sMAPE son las métricas definidas en la Sección 8 del modelo matemático."
+            "- **Precision = TP / (TP + FP)** es una métrica de **clasificación**: cuenta aciertos cuando el "
+            "modelo responde sí o no. Este proyecto es de **regresión**: el modelo responde un número (kW), "
+            "así que no hay positivos ni negativos que contar.\n"
+            f"- Por eso se usa la **precisión por tolerancia**: el porcentaje de intervalos en los que "
+            f"|y − ŷ| ≤ {TOL} kW. Con esa tolerancia, XGBoost, Random Forest y la LSTM superan el 95 %.{ref_txt}\n"
+            "- **Error P95** dice lo mismo al revés: el error que el modelo no supera en el 95 % de los "
+            "intervalos.\n"
+            "- Las métricas principales de una regresión son **MAE, MSE, RMSE y R²**, definidas en la "
+            "Sección 8 del modelo matemático. La precisión por tolerancia las complementa, no las reemplaza."
         )
 
     # F8

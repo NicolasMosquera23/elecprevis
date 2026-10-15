@@ -57,7 +57,7 @@ verifica que la salida coincida con la de Keras (diferencia máxima ≈ 1e-6 kW)
 | F4 | Predicción | Predicción del siguiente intervalo (30 min) con los 4 modelos frente al valor real |
 | F5 | Predicción | Pronóstico encadenado de 24 h (48 pasos) con selector de modelos |
 | F6 | Predicción | Calculadora: predicción a partir de condiciones ingresadas a mano |
-| F7 | Comparación | Tabla de métricas de los 4 modelos (MAE, MSE, RMSE, R², sMAPE y precisión) |
+| F7 | Comparación | Tabla de métricas de los 4 modelos (MAE, MSE, RMSE, R², sMAPE y precisión por tolerancia) |
 | F8 | Comparación | Real vs. predicho por semana, error por hora del día y dispersión |
 | F9 | Comparación | Estabilidad por cortes de la validación de ventana expansiva |
 | F10 | Escenarios | Desglose de la energía por grupo de carga (submediciones) |
@@ -69,16 +69,18 @@ verifica que la salida coincida con la de Keras (diferencia máxima ≈ 1e-6 kW)
 
 ## Precisión
 
-El modelo matemático define MAE, MSE, RMSE, R² y sMAPE. La rúbrica pide "precisión > 95 %" sin
-definirla para regresión, así que la app reporta tres lecturas (ver `core.py`):
+La precisión TP / (TP + FP) es una métrica de clasificación: cuenta aciertos cuando el modelo
+responde sí o no. Este proyecto es de regresión (el modelo responde un número en kW), así que la
+app reporta la **precisión por tolerancia**:
 
-| Lectura | Fórmula | Qué mide |
+| Métrica | Fórmula | Qué mide |
 |---|---|---|
-| Precisión energética (principal) | 1 − \|Σŷ − Σy\| / Σy | Acierto en la energía total del periodo de prueba |
-| Precisión diaria | 100 − sMAPE de la energía diaria | Acierto día a día |
-| Precisión por intervalo | 100 − sMAPE por intervalo | Acierto cada 30 min (la más exigente) |
+| Precisión ±1 kW | % de intervalos con \|y − ŷ\| ≤ 1 kW | Qué tan seguido el modelo queda cerca del valor real |
+| Error P95 | Percentil 95 de \|y − ŷ\| | El error que no se supera en el 95 % de los intervalos |
 
-La métrica principal se cambia en una línea: `PRECISION_PRINCIPAL` en `app/core.py`.
+Como referencia, la app reporta también la persistencia (predecir que se consume lo mismo que
+ahora). Las métricas principales siguen siendo MAE, MSE, RMSE y R² (modelo matemático §8). La
+tolerancia se cambia en `TOLERANCIA_KW`, en `app/core.py`.
 
 ## Supuestos de la app
 

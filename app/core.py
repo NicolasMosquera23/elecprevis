@@ -13,7 +13,7 @@ con las funciones de src/models.py. Lo único propio de la app es:
     - El pronóstico encadenado de 24 h (48 pasos), con la advertencia de la
       Sección 9: el error se acumula y no se cuantifica en la formulación.
     - Los escenarios hipotéticos de reducción sobre las submediciones.
-    - La métrica de "precisión" que pide la rúbrica (provisional, ver PRECISION).
+    - La precisión por tolerancia en kW que pide la rúbrica (ver TOLERANCIA_KW).
 """
 
 from __future__ import annotations
@@ -80,32 +80,27 @@ MESES = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "
 
 
 # --------------------------------------------------------------------------
-# Métrica de precisión (rúbrica: "precisión > 95 %")
+# Precisión por tolerancia (rúbrica: "precisión > 95 %")
 # --------------------------------------------------------------------------
-# El modelo matemático define MAE, MSE, RMSE, R² y sMAPE, pero no una
-# "precisión". Mientras el docente confirma qué métrica espera, la app reporta
-# como principal la PRECISIÓN ENERGÉTICA y muestra al lado las alternativas.
-# Para cambiar la métrica principal basta con cambiar PRECISION_PRINCIPAL.
-PRECISION_PRINCIPAL = "energetica"
+# La precisión TP / (TP + FP) es una métrica de clasificación y no aplica
+# directamente a una regresión, cuya salida es un número continuo (kW). Por
+# indicación de la docente se reporta la precisión por tolerancia: el
+# porcentaje de predicciones cuyo error absoluto no supera TOLERANCIA_KW.
+# Se acompaña del error P95, que dice lo mismo al revés: el error que el
+# modelo no supera en el 95 % de los intervalos.
+TOLERANCIA_KW = 1.0
 
 
-def precision_energetica(y, yhat) -> float:
-    """1 − |Σŷ − Σy| / Σy: qué tan bien se acierta la energía total del periodo."""
+def precision_tolerancia(y, yhat, tol: float = TOLERANCIA_KW) -> float:
+    """% de intervalos con |y − ŷ| ≤ tol."""
     y, yhat = np.asarray(y, float), np.asarray(yhat, float)
-    return float(100 * (1 - abs(yhat.sum() - y.sum()) / y.sum()))
+    return float(100 * np.mean(np.abs(y - yhat) <= tol))
 
 
-def precision_diaria(y, yhat, index) -> float:
-    """100 − sMAPE sobre la energía diaria (kWh por día)."""
-    df = pd.DataFrame({"y": y, "p": yhat}, index=index)
-    d = df.resample("D").sum() * HORAS_INTERVALO
-    d = d[d["y"] > 0]
-    return float(100 - smape(d["y"], d["p"]))
-
-
-def precision_intervalo(y, yhat) -> float:
-    """100 − sMAPE intervalo a intervalo (la lectura más exigente)."""
-    return float(100 - smape(y, yhat))
+def error_p95(y, yhat) -> float:
+    """Error absoluto que no se supera en el 95 % de los intervalos (kW)."""
+    y, yhat = np.asarray(y, float), np.asarray(yhat, float)
+    return float(np.quantile(np.abs(y - yhat), 0.95))
 
 
 def smape(y, yhat) -> float:
@@ -115,7 +110,7 @@ def smape(y, yhat) -> float:
     return float(100 * np.mean(2 * np.abs(y - yhat) / den))
 
 
-def metricas(y, yhat, index) -> dict:
+def metricas(y, yhat, index=None) -> dict:
     y, yhat = np.asarray(y, float), np.asarray(yhat, float)
     err = y - yhat
     mse = float(np.mean(err ** 2))
@@ -125,9 +120,8 @@ def metricas(y, yhat, index) -> dict:
         "RMSE": float(np.sqrt(mse)),
         "R2": float(1 - np.sum(err ** 2) / np.sum((y - y.mean()) ** 2)),
         "sMAPE": smape(y, yhat),
-        "Precisión energética": precision_energetica(y, yhat),
-        "Precisión diaria": precision_diaria(y, yhat, index),
-        "Precisión por intervalo": precision_intervalo(y, yhat),
+        "Precisión ±1 kW": precision_tolerancia(y, yhat),
+        "Error P95": error_p95(y, yhat),
     }
 
 
