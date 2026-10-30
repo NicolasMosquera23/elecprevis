@@ -99,7 +99,6 @@ app reporta la **precisión por tolerancia**:
 | Métrica | Fórmula | Qué mide |
 |---|---|---|
 | Precisión ±1 kW | % de intervalos con \|y − ŷ\| ≤ 1 kW | Qué tan seguido el modelo queda cerca del valor real |
-| Error P95 | Percentil 95 de \|y − ŷ\| | El error que no se supera en el 95 % de los intervalos |
 
 Como referencia, la app reporta también la persistencia (predecir que se consume lo mismo que
 ahora). Las métricas principales siguen siendo MAE, MSE, RMSE y R² (modelo matemático §8). La
