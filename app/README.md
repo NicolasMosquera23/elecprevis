@@ -72,28 +72,24 @@ parámetros se estiman en la primera mitad del periodo de prueba y todas se comp
 mitad. Se usa el promedio porque rinde prácticamente igual, no tiene parámetros que estimar y es el
 principio del random forest.
 
-## Funcionalidades (18)
+## Funcionalidades (12)
 
 | # | Sección | Funcionalidad |
 |---|---|---|
-| F1 | Histórico | Serie histórica interactiva con rango de fechas y resolución (30 min, hora, día, semana) |
-| F2 | Histórico | Indicadores del periodo: energía, potencia media, pico y costo en pesos |
-| F3 | Histórico | Patrones: mapa de calor hora × día de la semana y perfil mensual |
-| F4 | Predicción | Predicción del siguiente intervalo (30 min) con el ensamble y los 4 modelos frente al valor real |
-| F5 | Predicción | Pronóstico encadenado de 24 h (48 pasos) con selector de modelos, incluido el ensamble |
-| F6 | Predicción | Calculadora: predicción a partir de condiciones ingresadas a mano |
-| F7 | Comparación | Tabla de métricas del ensamble y los 4 modelos (MAE, MSE, RMSE, R², sMAPE y precisión por tolerancia) |
-| F8 | Comparación | Real vs. predicho por semana, error por hora del día y dispersión |
-| F9 | Comparación | Estabilidad por cortes de la validación de ventana expansiva |
-| F10 | Comparación | Registro de desempeño: métricas de entrenamiento frente a prueba (sobreajuste) |
-| F11 | Comparación | Ensamble: tres formas de combinar (promedio, ponderado, stacking) y correlación de errores |
-| F12 | Escenarios | Desglose de la energía por grupo de carga (submediciones) |
-| F13 | Escenarios | Simulador de reducción sobre el consumo medido o el previsto por el ensamble |
-| F14 | Escenarios | Costo y ahorro en pesos con tarifa configurable (Electrohuila estrato 4 por defecto) |
-| F15 | Modelo | Importancia de variables (RF, XGBoost) y coeficientes (lineal) |
-| F16 | Modelo | Defensa del modelo: variables, objetivo, entrenamiento, evaluación, errores y limitaciones |
-| F17 | Modelo | Ecuaciones clave (incluido el ensamble) y trazabilidad ecuación → código |
-| F18 | Todas | Descarga en CSV de datos, predicciones, pronósticos y escenarios |
+| F1 | Histórico | Serie histórica interactiva (30 min, hora, día, semana) con indicadores de energía, potencia media, pico y costo en pesos |
+| F2 | Histórico | Patrones: mapa de calor hora × día de la semana y perfil mensual |
+| F3 | Predicción | Predicción del siguiente intervalo (30 min) con el ensamble y los 4 modelos frente al valor real |
+| F4 | Predicción | Pronóstico encadenado de 24 h (48 pasos) con selector de modelos, incluido el ensamble |
+| F5 | Comparación | Tabla de métricas del ensamble y los 4 modelos (MAE, MSE, RMSE, R², sMAPE y precisión por tolerancia) |
+| F6 | Comparación | Real vs. predicho por semana, error por hora del día y dispersión |
+| F7 | Comparación | Estabilidad por cortes de la validación de ventana expansiva |
+| F8 | Comparación | Registro de desempeño: métricas de entrenamiento frente a prueba (sobreajuste) |
+| F9 | Comparación | Ensamble: tres formas de combinar (promedio, ponderado, stacking) y correlación de errores |
+| F10 | Escenarios | Simulador de escenarios sobre el consumo medido o previsto, con desglose por grupo de carga, ahorro y costo (tarifa configurable) |
+| F11 | Modelo | Importancia de variables (RF, XGBoost) y coeficientes (lineal) |
+| F12 | Modelo | Defensa del modelo, ecuaciones clave (incluido el ensamble) y trazabilidad ecuación → código |
+
+Todas las secciones permiten descargar en CSV los datos que muestran.
 
 ## Precisión
 
