@@ -72,22 +72,21 @@ parámetros se estiman en la primera mitad del periodo de prueba y todas se comp
 mitad. Se usa el promedio porque rinde prácticamente igual, no tiene parámetros que estimar y es el
 principio del random forest.
 
-## Funcionalidades (12)
+## Funcionalidades (11)
 
 | # | Sección | Funcionalidad |
 |---|---|---|
 | F1 | Histórico | Serie histórica interactiva (30 min, hora, día, semana) con indicadores de energía, potencia media, pico y costo en pesos |
 | F2 | Histórico | Patrones: mapa de calor hora × día de la semana y perfil mensual |
 | F3 | Predicción | Predicción del siguiente intervalo (30 min) con el ensamble y los 4 modelos frente al valor real |
-| F4 | Predicción | Pronóstico encadenado de 24 h (48 pasos) con selector de modelos, incluido el ensamble |
-| F5 | Comparación | Tabla de métricas del ensamble y los 4 modelos (MAE, MSE, RMSE, R², sMAPE y precisión por tolerancia) |
-| F6 | Comparación | Real vs. predicho por semana, error por hora del día y dispersión |
-| F7 | Comparación | Estabilidad por cortes de la validación de ventana expansiva |
-| F8 | Comparación | Registro de desempeño: métricas de entrenamiento frente a prueba (sobreajuste) |
-| F9 | Comparación | Ensamble: tres formas de combinar (promedio, ponderado, stacking) y correlación de errores |
-| F10 | Escenarios | Simulador de escenarios sobre el consumo medido o previsto, con desglose por grupo de carga, ahorro y costo (tarifa configurable) |
-| F11 | Modelo | Importancia de variables (RF, XGBoost) y coeficientes (lineal) |
-| F12 | Modelo | Defensa del modelo, ecuaciones clave (incluido el ensamble) y trazabilidad ecuación → código |
+| F4 | Comparación | Tabla de métricas del ensamble y los 4 modelos (MAE, MSE, RMSE, R², sMAPE y precisión por tolerancia) |
+| F5 | Comparación | Real vs. predicho por semana, error por hora del día y dispersión |
+| F6 | Comparación | Estabilidad por cortes de la validación de ventana expansiva |
+| F7 | Comparación | Registro de desempeño: métricas de entrenamiento frente a prueba (sobreajuste) |
+| F8 | Comparación | Ensamble: tres formas de combinar (promedio, ponderado, stacking) y correlación de errores |
+| F9 | Escenarios | Simulador de escenarios sobre el consumo medido o previsto, con desglose por grupo de carga, ahorro y costo (tarifa configurable) |
+| F10 | Modelo | Importancia de variables (RF, XGBoost) y coeficientes (lineal) |
+| F11 | Modelo | Defensa del modelo, ecuaciones clave (incluido el ensamble) y trazabilidad ecuación → código |
 
 Todas las secciones permiten descargar en CSV los datos que muestran.
 
@@ -108,9 +107,6 @@ tolerancia se cambia en `TOLERANCIA_KW`, en `app/core.py`.
 
 ## Supuestos de la app
 
-- **Pronóstico de 24 h:** cada paso usa la predicción anterior como dato. Las mediciones futuras
-  distintas de la potencia activa se toman del mismo intervalo del día anterior. El error se
-  acumula y no se cuantifica en el modelo matemático (§9).
 - **Escenarios:** y′ₜ = yₜ − Σₖ rₖ·sₖ,ₜ, con sₖ la submedición k en kW (Wh/min × 60/1000).
   Son hipotéticos, no ahorros comprobados.
 
