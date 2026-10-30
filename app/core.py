@@ -49,8 +49,61 @@ LINEAR_FEATURES = [c for c in FEATURES if c not in LINEAR_EXCLUDE]
 N_STEPS = 48  # ventana de la LSTM: 48 intervalos = 24 h
 
 MODELOS = ["Regresión lineal", "Random Forest", "XGBoost", "LSTM"]
+
+# Random forest de la app: 150 árboles con hojas de al menos 10 observaciones.
+# El mínimo por hoja limita el sobreajuste (cada árbol deja de memorizar
+# intervalos sueltos) y baja el archivo de ≈160 MB a ≈15 MB, así que se puede
+# versionar y la app publicada lo usa. En prueba rinde igual o mejor que el
+# de 200 árboles sin límite (R² 0,68 frente a 0,67).
+RF_PARAMS = {"n_estimators": 150, "min_samples_leaf": 10}
+
+# --------------------------------------------------------------------------
+# Ensamble de los cuatro modelos (Modelo matemático §6.5)
+# --------------------------------------------------------------------------
+# Mismo principio del random forest: en regresión, el bosque predice el
+# promedio de sus árboles. Aquí los "votantes" son los cuatro modelos, que son
+# de naturaleza distinta (lineal, árboles, red recurrente) y por eso se
+# equivocan en momentos distintos; al promediar, parte del error se compensa.
+#
+#     ŷ_ens = (ŷ_lineal + ŷ_RF + ŷ_XGB + ŷ_LSTM) / 4
+#
+# Se comparan además dos formas de combinar que necesitan estimar parámetros:
+#     ponderado: ŷ = Σ wᵢ ŷᵢ, wᵢ ≥ 0, Σ wᵢ = 1 (mínimos cuadrados no negativos)
+#     stacking:  ŷ = a + Σ bᵢ ŷᵢ (regresión lineal sobre las predicciones)
+# Sus parámetros se estiman con la primera mitad del periodo de prueba
+# (calibración) y las tres se comparan en la segunda mitad (evaluación), para
+# no medir con los mismos datos con los que se ajustaron.
+ENSAMBLE = "Ensamble"
+COMBINACIONES = {
+    "Promedio": "Cada modelo vale un voto, como los árboles de un random forest",
+    "Ponderado": "Vota más el modelo que menos se equivoca (pesos ≥ 0 que suman 1)",
+    "Stacking": "Una regresión lineal aprende a combinar las cuatro predicciones",
+}
+
+
+def ensamble_promedio(preds) -> np.ndarray:
+    """preds: DataFrame o dict con una columna por modelo de MODELOS."""
+    return np.mean(np.column_stack([np.asarray(preds[m], float) for m in MODELOS]), axis=1)
+
+
+def combinar(preds, metodo: str = "Promedio", params: dict | None = None) -> np.ndarray:
+    """Combina las predicciones de los cuatro modelos con el método indicado."""
+    if metodo == "Promedio":
+        return ensamble_promedio(preds)
+    M = np.column_stack([np.asarray(preds[m], float) for m in MODELOS])
+    if metodo == "Ponderado":
+        w = np.array([params["pesos"][m] for m in MODELOS])
+        return M @ w
+    if metodo == "Stacking":
+        b = np.array([params["coef"][m] for m in MODELOS])
+        return np.clip(params["intercepto"] + M @ b, 0, None)
+    raise ValueError(metodo)
+
+
 # Paleta categórica validada (orden fijo, el color sigue al modelo, no al ranking).
 COLOR_MODELO = {
+    "Ensamble": "#7b3fbf",
+    "Ensamble (sin LSTM)": "#7b3fbf",
     "Real": "#0b0b0b",
     "XGBoost": "#2a78d6",
     "Random Forest": "#eb6834",
@@ -191,7 +244,7 @@ class LSTMNumpy:
 
 @lru_cache(maxsize=1)
 def cargar_modelos() -> dict:
-    """Carga los modelos disponibles. Random Forest es opcional (pesa mucho)."""
+    """Carga los cuatro modelos (el random forest es opcional por si falta el archivo)."""
     modelos = {}
     modelos["Regresión lineal"] = LinealOLS(json.loads((ART / "lineal.json").read_text()))
     from xgboost import XGBRegressor
@@ -209,7 +262,13 @@ def cargar_modelos() -> dict:
 
 
 def predecir(nombre: str, modelo, X: pd.DataFrame) -> np.ndarray:
-    """Un paso: X con las 19 columnas (para la LSTM, las últimas 48 filas)."""
+    """
+    Un paso: X con las 19 columnas (para la LSTM, las últimas 48 filas).
+    Con nombre == ENSAMBLE, `modelo` es el dict de los cuatro modelos y la
+    salida es el promedio de sus predicciones para la última fila.
+    """
+    if nombre == ENSAMBLE:
+        return np.array([np.mean([predecir(m, modelo[m], X)[-1] for m in MODELOS])])
     if nombre == "LSTM":
         seq = X[FEATURES].to_numpy(float)[-N_STEPS:][None, :, :]
         return modelo.predict(seq)

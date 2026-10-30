@@ -9,7 +9,8 @@ Integrantes: Juan Diego Montenegro Segura, Sofía Montaña, Nicolás Mosquera Pe
 
 ## Qué hace el proyecto
 
-Compara cuatro modelos (regresión lineal, random forest, XGBoost, LSTM) para predecir el
+Compara cuatro modelos (regresión lineal, random forest, XGBoost, LSTM) y los combina en un
+ensamble por promedio, con el mismo principio del random forest, para predecir el
 consumo eléctrico residencial a 30 minutos, usando el dataset
 [Individual Household Electric Power Consumption](https://archive.ics.uci.edu/dataset/235/individual+household+electric+power+consumption)
 del repositorio UCI, y simula escenarios de eficiencia energética a partir de las submediciones
@@ -65,7 +66,8 @@ localmente con `download_data.py`, que lo trae directo desde UCI.
 2. **Análisis exploratorio** — descomposición de la serie, patrones horarios/semanales/estacionales.
 3. **Construcción del problema predictivo** — horizonte de un paso, split temporal train/test.
 4. **Modelado y evaluación** — regresión lineal, random forest, XGBoost, LSTM con walk-forward validation; métricas MAE, RMSE, R², sMAPE.
-5. **Escenarios de eficiencia** — simulación de reducción sobre las submediciones, sin atribuir causalidad.
-6. **Aplicación** — prototipo con histórico, predicción y escenarios simulados.
+5. **Ensamble** — promedio de las predicciones de los cuatro modelos (`app/export_ensamble.py`), comparado con promedio ponderado y stacking.
+6. **Escenarios de eficiencia** — simulación de reducción sobre las submediciones, sin atribuir causalidad.
+7. **Aplicación** — prototipo con histórico, predicción y escenarios simulados.
 
 Detalle completo en `docs/Entregable_1.pdf`.

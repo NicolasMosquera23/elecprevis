@@ -1,8 +1,9 @@
 # ElecPrevis · Aplicación (Entregable 2, Parte 5)
 
 Aplicación web en Streamlit que implementa el modelo matemático del proyecto: muestra el
-histórico de consumo, predice el siguiente intervalo de 30 minutos con los cuatro modelos,
-compara su desempeño y simula escenarios hipotéticos de eficiencia sobre las submediciones.
+histórico de consumo, predice el siguiente intervalo de 30 minutos con un **ensamble de los cuatro
+modelos** (y con cada modelo por separado), compara su desempeño y simula escenarios hipotéticos de
+eficiencia sobre las submediciones.
 
 ## Cómo correrla
 
@@ -24,8 +25,8 @@ python src/preprocessing.py
 python app/train_export.py        # unos 30 min en un portátil; la LSTM y el walk-forward son lo más lento
 ```
 
-`train_export.py` entrena con las funciones de `src/models.py` (mismos hiperparámetros, misma
-semilla, misma partición 80/20) y exporta:
+`train_export.py` entrena con las funciones de `src/models.py` (misma semilla y misma partición
+80/20) y al final llama a `export_ensamble.py`. Exporta:
 
 | Archivo | Contenido |
 |---|---|
@@ -33,39 +34,66 @@ semilla, misma partición 80/20) y exporta:
 | `lineal.json` | Coeficientes β, intercepto y escalador de la regresión lineal |
 | `xgboost.json` | Modelo XGBoost |
 | `lstm.npz` | Pesos de la LSTM y su escalador |
-| `random_forest.joblib` | Random forest (≈160 MB, **no se sube a GitHub**, ver abajo) |
-| `predicciones_prueba.parquet` | Predicción a un paso de los 4 modelos en todo el periodo de prueba |
-| `resultados.json` | Métricas, walk-forward, importancia de variables e hiperparámetros |
+| `random_forest.joblib` | Random forest liviano (150 árboles, ≥ 10 observaciones por hoja, ≈15 MB) |
+| `predicciones_prueba.parquet` | Predicción a un paso de los 4 modelos y del ensamble en todo el periodo de prueba |
+| `resultados.json` | Métricas de entrenamiento y prueba, ensamble, walk-forward, importancia de variables e hiperparámetros |
 
-**Random forest:** con 200 árboles pesa ≈160 MB comprimido y GitHub no acepta archivos de más
-de 100 MB. Por eso no se versiona. Sus predicciones del periodo de prueba sí están en
-`predicciones_prueba.parquet`, así que aparece en la predicción del siguiente intervalo y en
-la comparación. Solo queda fuera del pronóstico de 24 h y de la calculadora cuando la app corre
-sin el archivo. En local, después de correr `train_export.py`, también aparece ahí.
+Para rehacer solo el ensamble y el random forest, sin TensorFlow ni el dataset crudo (parte de lo
+que ya está en `app/artifacts/`):
+
+```bash
+python app/export_ensamble.py            # unos 10 min, sobre todo por el walk-forward
+python app/export_ensamble.py --sin-rf   # reutiliza el random_forest.joblib existente
+```
+
+**Random forest liviano:** el de 200 árboles sin límite de profundidad pesaba ≈160 MB y GitHub no
+acepta archivos de más de 100 MB, así que la app publicada no lo tenía. Con 150 árboles y un mínimo
+de 10 observaciones por hoja (`core.RF_PARAMS`) pesa ≈15 MB y en prueba rinde igual o mejor
+(R² 0,68 frente a 0,67): el mínimo por hoja evita que cada árbol memorice intervalos sueltos.
 
 **LSTM sin TensorFlow:** la app evalúa la red con NumPy (`core.LSTMNumpy`), escribiendo una a una
 las ecuaciones de las compuertas de la Sección 6.4 del modelo matemático. `train_export.py`
 verifica que la salida coincida con la de Keras (diferencia máxima ≈ 1e-6 kW).
 
-## Funcionalidades (15)
+## Ensamble de los cuatro modelos
+
+La predicción principal de la app es el promedio de los cuatro modelos:
+
+    ŷ_ens = (ŷ_lineal + ŷ_RF + ŷ_XGB + ŷ_LSTM) / 4
+
+Es el mismo principio del random forest, que en regresión predice el promedio de sus árboles. Aquí
+los "votantes" son cuatro modelos de naturaleza distinta (lineal, dos ensambles de árboles y una red
+recurrente), que se equivocan en momentos distintos; al promediar, parte del error se compensa. La
+app muestra la correlación entre los errores de los modelos como evidencia de esa diversidad.
+
+`export_ensamble.py` compara además dos formas de combinar con parámetros, el **promedio ponderado**
+(pesos ≥ 0 que suman 1) y el **stacking** (regresión lineal sobre las cuatro predicciones). Sus
+parámetros se estiman en la primera mitad del periodo de prueba y todas se comparan en la segunda
+mitad. Se usa el promedio porque rinde prácticamente igual, no tiene parámetros que estimar y es el
+principio del random forest.
+
+## Funcionalidades (18)
 
 | # | Sección | Funcionalidad |
 |---|---|---|
 | F1 | Histórico | Serie histórica interactiva con rango de fechas y resolución (30 min, hora, día, semana) |
 | F2 | Histórico | Indicadores del periodo: energía, potencia media, pico y costo en pesos |
 | F3 | Histórico | Patrones: mapa de calor hora × día de la semana y perfil mensual |
-| F4 | Predicción | Predicción del siguiente intervalo (30 min) con los 4 modelos frente al valor real |
-| F5 | Predicción | Pronóstico encadenado de 24 h (48 pasos) con selector de modelos |
+| F4 | Predicción | Predicción del siguiente intervalo (30 min) con el ensamble y los 4 modelos frente al valor real |
+| F5 | Predicción | Pronóstico encadenado de 24 h (48 pasos) con selector de modelos, incluido el ensamble |
 | F6 | Predicción | Calculadora: predicción a partir de condiciones ingresadas a mano |
-| F7 | Comparación | Tabla de métricas de los 4 modelos (MAE, MSE, RMSE, R², sMAPE y precisión por tolerancia) |
+| F7 | Comparación | Tabla de métricas del ensamble y los 4 modelos (MAE, MSE, RMSE, R², sMAPE y precisión por tolerancia) |
 | F8 | Comparación | Real vs. predicho por semana, error por hora del día y dispersión |
 | F9 | Comparación | Estabilidad por cortes de la validación de ventana expansiva |
-| F10 | Escenarios | Desglose de la energía por grupo de carga (submediciones) |
-| F11 | Escenarios | Simulador de reducción por grupo de carga |
-| F12 | Escenarios | Costo y ahorro en pesos con tarifa configurable (Electrohuila estrato 4 por defecto) |
-| F13 | Modelo | Importancia de variables (RF, XGBoost) y coeficientes (lineal) |
-| F14 | Modelo | Ecuaciones clave y trazabilidad ecuación → código |
-| F15 | Todas | Descarga en CSV de datos, predicciones, pronósticos y escenarios |
+| F10 | Comparación | Registro de desempeño: métricas de entrenamiento frente a prueba (sobreajuste) |
+| F11 | Comparación | Ensamble: tres formas de combinar (promedio, ponderado, stacking) y correlación de errores |
+| F12 | Escenarios | Desglose de la energía por grupo de carga (submediciones) |
+| F13 | Escenarios | Simulador de reducción sobre el consumo medido o el previsto por el ensamble |
+| F14 | Escenarios | Costo y ahorro en pesos con tarifa configurable (Electrohuila estrato 4 por defecto) |
+| F15 | Modelo | Importancia de variables (RF, XGBoost) y coeficientes (lineal) |
+| F16 | Modelo | Defensa del modelo: variables, objetivo, entrenamiento, evaluación, errores y limitaciones |
+| F17 | Modelo | Ecuaciones clave (incluido el ensamble) y trazabilidad ecuación → código |
+| F18 | Todas | Descarga en CSV de datos, predicciones, pronósticos y escenarios |
 
 ## Precisión
 
