@@ -68,9 +68,8 @@ RF_PARAMS = {"n_estimators": 150, "min_samples_leaf": 10}
 # Se comparan además dos formas de combinar que necesitan estimar parámetros:
 #     ponderado: ŷ = Σ wᵢ ŷᵢ, wᵢ ≥ 0, Σ wᵢ = 1 (mínimos cuadrados no negativos)
 #     stacking:  ŷ = a + Σ bᵢ ŷᵢ (regresión lineal sobre las predicciones)
-# Sus parámetros se estiman con la primera mitad del periodo de prueba
-# (calibración) y las tres se comparan en la segunda mitad (evaluación), para
-# no medir con los mismos datos con los que se ajustaron.
+# La forma que usa la app y sus parámetros se eligen en la validación (último
+# año del entrenamiento, ver app/validacion.py), nunca con el periodo de prueba.
 ENSAMBLE = "Ensamble"
 COMBINACIONES = {
     "Promedio": "Cada modelo vale un voto, como los árboles de un random forest",
@@ -96,6 +95,16 @@ def combinar(preds, metodo: str = "Promedio", params: dict | None = None) -> np.
         b = np.array([params["coef"][m] for m in MODELOS])
         return np.clip(params["intercepto"] + M @ b, 0, None)
     raise ValueError(metodo)
+
+
+def ensamble(preds, comb: dict | None = None) -> np.ndarray:
+    """
+    Predicción del ensamble con la forma de combinar elegida en validación.
+    comb: {"metodo": ..., "params": ...}; por defecto, la guardada en resultados.json.
+    """
+    if comb is None:
+        comb = cargar_resultados().get("ensamble", {}).get("combinacion", {"metodo": "Promedio", "params": None})
+    return combinar(preds, comb["metodo"], comb.get("params"))
 
 
 # Paleta categórica validada (orden fijo, el color sigue al modelo, no al ranking).
@@ -150,6 +159,71 @@ def precision_tolerancia(y, yhat, tol: float = TOLERANCIA_KW) -> float:
     """% de intervalos con |y − ŷ| ≤ tol."""
     y, yhat = np.asarray(y, float), np.asarray(yhat, float)
     return float(100 * np.mean(np.abs(y - yhat) <= tol))
+
+
+# --------------------------------------------------------------------------
+# Casos críticos: picos de consumo
+# --------------------------------------------------------------------------
+# La precisión por tolerancia se infla porque la mayoría de los intervalos son
+# de consumo bajo: predecir siempre la media del entrenamiento ya acierta ±1 kW
+# en el 91 % de la prueba. El caso que importa (a la red y a la factura) es el
+# pico: un intervalo con consumo real mayor que UMBRAL_PICO_KW, casi el doble
+# de la media (≈1,1 kW) y alrededor del 10 % de los intervalos. La alerta de
+# pico se da cuando la predicción supera un umbral de alerta u, que se elige en
+# validación (no tiene por qué ser 2 kW: los modelos subestiman los picos).
+UMBRAL_PICO_KW = 2.0
+UMBRALES_ALERTA = np.round(np.arange(0.50, 4.0001, 0.05), 2)  # rejilla de búsqueda (kW)
+
+# Validación: el último año del entrenamiento (365 días × 48 intervalos).
+N_VALIDACION = 365 * 48
+
+# Ajuste controlado "más peso a los picos": en el entrenamiento, los intervalos
+# cuyo consumo siguiente supera UMBRAL_PICO_KW pesan PESO_PICOS veces más.
+PESO_PICOS = 3.0
+SUFIJO_PESO = " (peso picos)"
+
+# Reglas de decisión, fijadas antes de mirar la prueba:
+#   combinación: la de menor RMSE en validación; si una más simple queda a
+#                menos de TOLERANCIA_SIMPLE del mejor RMSE, se elige la simple.
+#   umbral:      el de mayor F1 de la clase pico en validación.
+#   peso picos:  se adopta si sube el F1 de validación en al menos MEJORA_F1
+#                y el RMSE no empeora más de PEOR_RMSE.
+TOLERANCIA_SIMPLE = 0.005
+MEJORA_F1 = 0.01
+PEOR_RMSE = 0.01
+
+
+def metricas_pico(y, yhat, umbral_alerta: float, pico: float = UMBRAL_PICO_KW) -> dict:
+    """
+    Desempeño en los casos críticos. Real: y > pico. Alerta: ŷ > umbral_alerta.
+    El PR-AUC usa ŷ como puntaje y no depende del umbral.
+    """
+    from sklearn.metrics import average_precision_score
+
+    y, yhat = np.asarray(y, float), np.asarray(yhat, float)
+    real, alerta = y > pico, yhat > umbral_alerta
+    tp = int(np.sum(real & alerta))
+    fp = int(np.sum(~real & alerta))
+    fn = int(np.sum(real & ~alerta))
+    tn = int(np.sum(~real & ~alerta))
+    recall = tp / (tp + fn) if tp + fn else 0.0
+    precision = tp / (tp + fp) if tp + fp else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+    return {
+        "Umbral de alerta (kW)": float(umbral_alerta),
+        "Recall": recall,
+        "Precisión": precision,
+        "F1": f1,
+        "PR-AUC": float(average_precision_score(real, yhat)),
+        "Exactitud": (tp + tn) / len(y),
+        "TP": tp, "FP": fp, "FN": fn, "TN": tn,
+    }
+
+
+def mejor_umbral(y, yhat) -> float:
+    """Umbral de alerta con mayor F1 de la clase pico (se usa solo en validación)."""
+    f1 = [metricas_pico(y, yhat, u)["F1"] for u in UMBRALES_ALERTA]
+    return float(UMBRALES_ALERTA[int(np.argmax(f1))])
 
 
 def smape(y, yhat) -> float:
@@ -260,10 +334,10 @@ def predecir(nombre: str, modelo, X: pd.DataFrame) -> np.ndarray:
     """
     Un paso: X con las 19 columnas (para la LSTM, las últimas 48 filas).
     Con nombre == ENSAMBLE, `modelo` es el dict de los cuatro modelos y la
-    salida es el promedio de sus predicciones para la última fila.
+    salida combina sus predicciones para la última fila (ver ensamble()).
     """
     if nombre == ENSAMBLE:
-        return np.array([np.mean([predecir(m, modelo[m], X)[-1] for m in MODELOS])])
+        return ensamble({m: predecir(m, modelo[m], X)[-1:] for m in MODELOS})
     if nombre == "LSTM":
         seq = X[FEATURES].to_numpy(float)[-N_STEPS:][None, :, :]
         return modelo.predict(seq)
