@@ -53,29 +53,38 @@ def estilo(fig, alto=380, leyenda=True):
     return fig
 
 
-@st.cache_data(show_spinner=False)
-def serie():
+# Las cachés dependen de la fecha de modificación de los artefactos. Streamlit solo
+# las invalida cuando cambia el código de la función, así que sin esto, después de
+# un merge que cambia resultados.json, la app publicada seguía mostrando los
+# resultados viejos hasta hacer Reboot.
+def version_artefactos() -> tuple:
+    return tuple(sorted((p.name, p.stat().st_mtime_ns) for p in core.ART.iterdir() if p.is_file()))
+
+
+@st.cache_data(show_spinner=False, max_entries=1)
+def serie(version):
     return core.cargar_serie().astype("float64")
 
 
-@st.cache_data(show_spinner=False)
-def predicciones():
+@st.cache_data(show_spinner=False, max_entries=1)
+def predicciones(version):
     return core.cargar_predicciones()
 
 
-@st.cache_data(show_spinner=False)
-def resultados():
+@st.cache_data(show_spinner=False, max_entries=1)
+def resultados(version):
     return core.cargar_resultados()
 
 
-@st.cache_resource(show_spinner="Cargando modelos…")
-def modelos():
+@st.cache_resource(show_spinner="Cargando modelos…", max_entries=1)
+def modelos(version):
     return core.cargar_modelos()
 
 
-S = serie()
-P = predicciones()
-R = resultados()
+VERSION = version_artefactos()
+S = serie(VERSION)
+P = predicciones(VERSION)
+R = resultados(VERSION)
 INI_PRUEBA = pd.Timestamp(R["dataset"]["inicio_prueba"])
 
 ETIQ_PREC = "Precisión ±1 kW"
