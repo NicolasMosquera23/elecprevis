@@ -279,7 +279,6 @@ elif pagina == "Comparación de modelos":
             "R²": tabla["R2"].map(lambda v: fmt(v, 4)),
             "sMAPE (%)": tabla["sMAPE"].map(lambda v: fmt(v, 2)),
             f"Precisión ±{TOL} kW (%)": tabla["Precisión ±1 kW"].map(lambda v: fmt(v, 2)),
-            "Error P95 (kW)": tabla["Error P95"].map(lambda v: fmt(v, 3)),
         })
 
     m = R["metricas_prueba"]
@@ -302,8 +301,6 @@ elif pagina == "Comparación de modelos":
             f"- Por eso se usa la **precisión por tolerancia**: el porcentaje de intervalos en los que "
             f"|y − ŷ| ≤ {TOL} kW. Con esa tolerancia, el ensamble, XGBoost, Random Forest y la LSTM superan el "
             f"95 %.{ref_txt}\n"
-            "- **Error P95** dice lo mismo al revés: el error que el modelo no supera en el 95 % de los "
-            "intervalos.\n"
             "- Las métricas principales de una regresión son **MAE, MSE, RMSE y R²**, definidas en la "
             "Sección 8 del modelo matemático. La precisión por tolerancia las complementa, no las reemplaza."
         )
@@ -599,8 +596,9 @@ elif pagina == "Modelo":
          f"individual ({mejor_ind})."
          + (f" La caída de R² entre entrenamiento y prueba es {fmt(caida, 3)}." if caida is not None else "")),
         ("5. Errores principales",
-         f"Los picos se subestiman: son encendidos repentinos (horno, calentador) que el pasado no anticipa. El "
-         f"error que no se supera en el 95 % de los intervalos es {fmt(m[E]['Error P95'], 2)} kW, y el error es "
+         f"Los picos se subestiman: son encendidos repentinos (horno, calentador) que el pasado no anticipa. "
+         f"Cuando el consumo real supera 2 kW, el ensamble se queda corto en promedio "
+         f"{fmt(-(P.loc[P['Real'] > 2, E] - P.loc[P['Real'] > 2, 'Real']).mean(), 2)} kW, y el error es "
          f"mayor entre las 19:00 y las 21:00, la hora de la cena (ver *Comparación*)."),
         ("6. Limitaciones actuales",
          "Datos de una sola vivienda en Francia (2006–2010); la predicción es solo a 30 minutos; los "
