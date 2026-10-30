@@ -6,6 +6,7 @@ Ejecutar desde la raíz del repo:
     streamlit run app/streamlit_app.py
 """
 
+import importlib
 import sys
 from pathlib import Path
 
@@ -17,6 +18,13 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import core  # noqa: E402
+
+# Streamlit Cloud vuelve a ejecutar este script cuando cambia el repositorio, pero
+# deja en memoria los módulos ya importados: después de un merge, la app nueva
+# podía correr con el core.py viejo y fallar (AttributeError). Recargarlos en cada
+# ejecución lo evita, y es barato porque los datos y los modelos están en st.cache_*.
+importlib.reload(core.ft)  # src/features.py, que core usa
+core = importlib.reload(core)
 
 st.set_page_config(page_title="ElecPrevis", page_icon="⚡", layout="wide")
 
