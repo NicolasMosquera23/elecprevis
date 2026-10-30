@@ -78,24 +78,18 @@ TODOS = [E] + core.MODELOS  # el ensamble primero: es el modelo principal de la 
 ENS = R.get("ensamble", {})
 
 FUNCIONALIDADES = [
-    ("Histórico", "F1. Serie histórica interactiva con rango de fechas y resolución ajustable"),
-    ("Histórico", "F2. Indicadores del periodo: energía, potencia media, pico y costo"),
-    ("Histórico", "F3. Patrones de consumo: mapa de calor hora × día y perfil mensual"),
-    ("Predicción", "F4. Predicción del siguiente intervalo (30 min) con el ensamble y los 4 modelos"),
-    ("Predicción", "F5. Pronóstico encadenado de 24 h con selector de modelo (incluye el ensamble)"),
-    ("Predicción", "F6. Calculadora: predicción a partir de condiciones ingresadas a mano"),
-    ("Comparación", "F7. Tabla de métricas del ensamble y los 4 modelos (MAE, MSE, RMSE, R², sMAPE, precisión por tolerancia)"),
-    ("Comparación", "F8. Real vs. predicho y error por hora del día en el periodo de prueba"),
-    ("Comparación", "F9. Estabilidad por cortes de la validación de ventana expansiva"),
-    ("Comparación", "F10. Registro de desempeño: métricas de entrenamiento frente a prueba (sobreajuste)"),
-    ("Comparación", "F11. Ensamble: comparación de tres formas de combinar y diversidad de los errores"),
-    ("Escenarios", "F12. Desglose del consumo por grupo de carga (submediciones)"),
-    ("Escenarios", "F13. Simulador de escenarios de reducción sobre el consumo medido o el previsto por el ensamble"),
-    ("Escenarios", "F14. Estimación de costo y ahorro en pesos con tarifa configurable"),
-    ("Modelo", "F15. Importancia de variables y coeficientes de cada modelo"),
-    ("Modelo", "F16. Defensa del modelo: variables, objetivo, entrenamiento, evaluación, errores y limitaciones"),
-    ("Modelo", "F17. Trazabilidad ecuación → código del modelo matemático"),
-    ("Todas", "F18. Descarga en CSV de datos, predicciones y escenarios"),
+    ("Histórico", "F1. Serie histórica interactiva con indicadores de energía, potencia media, pico y costo"),
+    ("Histórico", "F2. Patrones de consumo: mapa de calor hora × día y perfil mensual"),
+    ("Predicción", "F3. Predicción del siguiente intervalo (30 min) con el ensamble y los 4 modelos"),
+    ("Predicción", "F4. Pronóstico encadenado de 24 h con selector de modelo (incluye el ensamble)"),
+    ("Comparación", "F5. Tabla de métricas del ensamble y los 4 modelos (MAE, MSE, RMSE, R², sMAPE, precisión por tolerancia)"),
+    ("Comparación", "F6. Real vs. predicho y error por hora del día en el periodo de prueba"),
+    ("Comparación", "F7. Estabilidad por cortes de la validación de ventana expansiva"),
+    ("Comparación", "F8. Registro de desempeño: métricas de entrenamiento frente a prueba (sobreajuste)"),
+    ("Comparación", "F9. Ensamble: comparación de tres formas de combinar y diversidad de los errores"),
+    ("Escenarios", "F10. Simulador de escenarios con desglose por grupo de carga, ahorro y costo en pesos"),
+    ("Modelo", "F11. Importancia de variables y coeficientes de cada modelo"),
+    ("Modelo", "F12. Defensa del modelo, ecuaciones y trazabilidad ecuación → código"),
 ]
 
 # --------------------------------------------------------------------------
@@ -166,7 +160,7 @@ if pagina == "Inicio":
     )
 
 # ==========================================================================
-# HISTÓRICO (F1, F2, F3)
+# HISTÓRICO (F1, F2)
 # ==========================================================================
 elif pagina == "Histórico":
     st.title("Histórico de consumo")
@@ -183,7 +177,7 @@ elif pagina == "Histórico":
         st.warning("No hay datos en ese rango.")
         st.stop()
 
-    # F2
+    # F1 (indicadores)
     energia = sub["Global_active_power"].sum() * core.HORAS_INTERVALO
     dias = max((d1 - d0).total_seconds() / 86400, 1 / 48)
     k1, k2, k3, k4 = st.columns(4)
@@ -193,7 +187,7 @@ elif pagina == "Histórico":
               help=f"Ocurrió el {sub['Global_active_power'].idxmax():%d/%m/%Y %H:%M}")
     k4.metric("Costo estimado", cop(energia * tarifa), help=f"≈ {cop(energia * tarifa / dias * 30)} por mes")
 
-    # F1
+    # F1 (serie)
     regla = {"30 min": None, "Hora": "h", "Día": "D", "Semana": "W"}[res]
     y = sub["Global_active_power"] if regla is None else sub["Global_active_power"].resample(regla).mean()
     fig = go.Figure(go.Scatter(x=y.index, y=y.values, mode="lines", name="Potencia activa",
@@ -202,7 +196,7 @@ elif pagina == "Histórico":
     fig.update_yaxes(title="Potencia activa media (kW)", rangemode="tozero")
     st.plotly_chart(estilo(fig, leyenda=False), use_container_width=True)
 
-    # F3
+    # F2
     st.subheader("Patrones de consumo")
     c1, c2 = st.columns(2)
     tmp = sub.assign(hora=sub.index.hour, dia=sub.index.dayofweek)
@@ -224,15 +218,15 @@ elif pagina == "Histórico":
     descargar(sub, f"elecprevis_historico_{rango[0]}_{rango[1]}.csv", "Descargar datos del rango (CSV)")
 
 # ==========================================================================
-# PREDICCIÓN (F4, F5, F6)
+# PREDICCIÓN (F3, F4)
 # ==========================================================================
 elif pagina == "Predicción":
     st.title("Predicción")
     st.caption("Los instantes disponibles pertenecen al periodo de prueba (13/02/2010 – 26/11/2010), "
                "que ningún modelo vio durante el entrenamiento.")
-    tab1, tab2, tab3 = st.tabs(["Siguiente intervalo (30 min)", "Pronóstico 24 h", "Calculadora"])
+    tab1, tab2 = st.tabs(["Siguiente intervalo (30 min)", "Pronóstico 24 h"])
 
-    with tab1:  # F4
+    with tab1:  # F3
         c1, c2 = st.columns(2)
         fecha = c1.date_input("Fecha", value=pd.Timestamp("2010-06-15").date(),
                               min_value=INI_PRUEBA.date(), max_value=P["origen"].max().date())
@@ -269,7 +263,7 @@ elif pagina == "Predicción":
             fig.update_yaxes(title="kW", rangemode="tozero")
             st.plotly_chart(estilo(fig, 360), use_container_width=True)
 
-    with tab2:  # F5
+    with tab2:  # F4
         mods = modelos()
         disponibles = [m for m in core.MODELOS if m in mods]
         if len(disponibles) == len(core.MODELOS):
@@ -315,48 +309,9 @@ elif pagina == "Predicción":
             st.dataframe(pd.DataFrame(filas), hide_index=True, use_container_width=True)
             descargar(df, f"elecprevis_pronostico24h_{fecha2}.csv")
 
-    with tab3:  # F6
-        st.markdown("Ingresa las condiciones del momento actual y obtén la predicción para los próximos 30 minutos. "
-                    "La LSTM no aparece aquí porque necesita las 48 filas de las últimas 24 h, no una sola; por eso "
-                    "el ensamble de esta calculadora promedia solo los otros tres modelos.")
-        mods = modelos()
-        c1, c2, c3 = st.columns(3)
-        f_cal = c1.date_input("Fecha", value=pd.Timestamp("2010-06-15").date(), key="fc")
-        h_cal = c1.slider("Hora", 0, 23, 19)
-        mi_cal = c1.radio("Minuto", [0, 30], horizontal=True)
-        gap = c2.number_input("Consumo actual (kW)", 0.0, 10.0, 1.5, 0.1)
-        lag1 = c2.number_input("Consumo hace 30 min (kW)", 0.0, 10.0, 1.3, 0.1)
-        lag48 = c2.number_input("Consumo ayer a esta hora (kW)", 0.0, 10.0, 1.6, 0.1)
-        lag336 = c2.number_input("Consumo hace una semana a esta hora (kW)", 0.0, 10.0, 1.4, 0.1)
-        roll = c2.number_input("Consumo medio de las últimas 24 h (kW)", 0.0, 10.0, 1.1, 0.1)
-        s1 = c3.slider("Cocina (Wh por minuto)", 0.0, 40.0, 0.0, 0.5)
-        s2 = c3.slider("Lavandería (Wh por minuto)", 0.0, 40.0, 1.0, 0.5)
-        s3 = c3.slider("Calentador / A.A. (Wh por minuto)", 0.0, 31.0, 6.0, 0.5)
-        volt = c3.slider("Tensión (V)", 225.0, 252.0, 240.0, 0.5)
-        reac = c3.slider("Potencia reactiva (kW)", 0.0, 1.0, 0.1, 0.01)
-        ts = pd.Timestamp(f"{f_cal} {h_cal:02d}:{mi_cal:02d}")
-        base = pd.DataFrame({
-            "Global_active_power": [gap], "Global_reactive_power": [reac], "Voltage": [volt],
-            "Global_intensity": [gap * 1000 / volt], "Sub_metering_1": [s1], "Sub_metering_2": [s2],
-            "Sub_metering_3": [s3],
-        }, index=pd.DatetimeIndex([ts]))
-        X = core.ft.add_calendar_features(base)
-        X["Global_active_power_lag1"] = lag1
-        X["Global_active_power_lag48"] = lag48
-        X["Global_active_power_lag336"] = lag336
-        X["Global_active_power_roll_mean_48"] = roll
-        X = X[core.FEATURES]
-        usados = [m for m in core.MODELOS if m in mods and m != "LSTM"]
-        valores = {m: float(core.predecir(m, mods[m], X)[0]) for m in usados}
-        cols = st.columns(len(usados) + 1)
-        cols[0].metric(f"**{E} (sin LSTM)**", fmt(np.mean(list(valores.values())), 3) + " kW")
-        for c, m in zip(cols[1:], usados):
-            c.metric(m, fmt(valores[m], 3) + " kW")
-        if (s1 + s2 + s3) * core.WH_MIN_A_KW > gap:
-            st.caption("⚠️ Las submediciones suman más que el consumo actual; revisa los valores.")
 
 # ==========================================================================
-# COMPARACIÓN DE MODELOS (F7, F8, F9, F10, F11)
+# COMPARACIÓN DE MODELOS (F5, F6, F7, F8, F9)
 # ==========================================================================
 elif pagina == "Comparación de modelos":
     st.title("Comparación: los cuatro modelos y su ensamble")
@@ -402,7 +357,7 @@ elif pagina == "Comparación de modelos":
             "Sección 8 del modelo matemático. La precisión por tolerancia las complementa, no las reemplaza."
         )
 
-    # F8
+    # F6
     st.subheader("Real vs. predicho")
     c1, c2 = st.columns([3, 1])
     dsel = c1.date_input("Semana desde", value=pd.Timestamp("2010-08-02").date(),
@@ -440,7 +395,7 @@ elif pagina == "Comparación de modelos":
     figs.update_yaxes(title="Predicho (kW)")
     c2.plotly_chart(estilo(figs, 340, leyenda=False).update_layout(hovermode="closest"), use_container_width=True)
 
-    # F9
+    # F7
     if R.get("walk_forward"):
         st.subheader("Estabilidad: validación de ventana expansiva (5 cortes)")
         st.caption("Cada corte entrena con todo lo anterior y evalúa el bloque siguiente, dentro del 80 % de "
@@ -465,7 +420,7 @@ elif pagina == "Comparación de modelos":
         resumen.columns = ["RMSE media", "RMSE desv.", "R² media", "R² desv."]
         st.dataframe(resumen.map(lambda v: fmt(v, 4)), use_container_width=True)
 
-    # F10
+    # F8
     if R.get("metricas_entrenamiento"):
         st.subheader("Registro de desempeño: entrenamiento frente a prueba")
         st.caption("Si un modelo es mucho mejor en entrenamiento que en prueba, memorizó los datos en vez de "
@@ -484,7 +439,7 @@ elif pagina == "Comparación de modelos":
             })
         st.dataframe(pd.DataFrame(filas), hide_index=True, use_container_width=True)
 
-    # F11
+    # F9
     if ENS:
         st.subheader("¿Cómo se combinan los cuatro modelos?")
         st.markdown(
@@ -538,7 +493,7 @@ elif pagina == "Comparación de modelos":
     descargar(P, "elecprevis_predicciones_prueba.csv", "Descargar predicciones del periodo de prueba (CSV)")
 
 # ==========================================================================
-# ESCENARIOS (F12, F13, F14)
+# ESCENARIOS (F10)
 # ==========================================================================
 elif pagina == "Escenarios de eficiencia":
     st.title("Escenarios de eficiencia energética")
@@ -552,7 +507,7 @@ elif pagina == "Escenarios de eficiencia":
         st.stop()
     sub = S.loc[pd.Timestamp(rango[0]):pd.Timestamp(rango[1]) + pd.Timedelta(hours=23, minutes=30)]
 
-    # F12
+    # F10 (desglose)
     d = core.desglose_kw(sub)
     energia = d.sum() * core.HORAS_INTERVALO
     nombres = {**core.SUBMEDICIONES, "Resto": "Resto del hogar (no submedido)"}
@@ -579,7 +534,7 @@ elif pagina == "Escenarios de eficiencia":
     st.markdown("**Perfil horario por grupo de carga**")
     st.plotly_chart(estilo(figa, 340), use_container_width=True)
 
-    # F13
+    # F10 (simulador)
     st.subheader("Simulador de reducción")
     base = st.radio(
         "Consumo de partida",
@@ -613,7 +568,7 @@ elif pagina == "Escenarios de eficiencia":
     e_esc = esc["Escenario"].sum() * core.HORAS_INTERVALO
     ahorro = e_real - e_esc
 
-    # F14
+    # F10 (costo y ahorro)
     dias = max(len(sub) / 48, 1)
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("Energía en el escenario", fmt(e_esc, 0) + " kWh", delta="−" + fmt(ahorro, 0) + " kWh", delta_color="inverse")
@@ -632,7 +587,7 @@ elif pagina == "Escenarios de eficiencia":
     descargar(esc, f"elecprevis_escenario_{rango[0]}_{rango[1]}.csv", "Descargar escenario (CSV)")
 
 # ==========================================================================
-# MODELO (F15, F16, F17)
+# MODELO (F11, F12)
 # ==========================================================================
 elif pagina == "Modelo":
     st.title("El modelo detrás de la app")
@@ -665,7 +620,7 @@ elif pagina == "Modelo":
     )
     st.latex(r"\mathbb{E}\!\left[\Big(\tfrac{1}{4}\textstyle\sum_i e_i\Big)^2\right] \;\le\; \tfrac{1}{4}\textstyle\sum_i \mathbb{E}\left[e_i^2\right]")
 
-    # F16
+    # F12 (defensa)
     st.subheader("Defensa del modelo")
     m = R["metricas_prueba"]
     mtr = R.get("metricas_entrenamiento", {})
@@ -704,7 +659,7 @@ elif pagina == "Modelo":
     for pregunta, respuesta in defensa:
         st.markdown(f"**{pregunta}**  \n{respuesta}")
 
-    # F15
+    # F11
     st.subheader("¿Qué variables usa cada modelo?")
     imp = R["importancia"]
     cmod = st.selectbox("Modelo", ["XGBoost", "Random Forest", "Regresión lineal"])
@@ -722,7 +677,7 @@ elif pagina == "Modelo":
     st.dataframe(pd.DataFrame(R["hiperparametros"].items(), columns=["Modelo", "Configuración"]),
                  hide_index=True, use_container_width=True)
 
-    # F17
+    # F12 (trazabilidad)
     st.subheader("Trazabilidad: de la ecuación al código")
     traz = [
         ("Remuestreo a 30 min", "preprocessing.resample_30min()"),
