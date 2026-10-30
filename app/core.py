@@ -143,8 +143,6 @@ MESES = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "
 # directamente a una regresión, cuya salida es un número continuo (kW). Por
 # indicación de la docente se reporta la precisión por tolerancia: el
 # porcentaje de predicciones cuyo error absoluto no supera TOLERANCIA_KW.
-# Se acompaña del error P95, que dice lo mismo al revés: el error que el
-# modelo no supera en el 95 % de los intervalos.
 TOLERANCIA_KW = 1.0
 
 
@@ -152,12 +150,6 @@ def precision_tolerancia(y, yhat, tol: float = TOLERANCIA_KW) -> float:
     """% de intervalos con |y − ŷ| ≤ tol."""
     y, yhat = np.asarray(y, float), np.asarray(yhat, float)
     return float(100 * np.mean(np.abs(y - yhat) <= tol))
-
-
-def error_p95(y, yhat) -> float:
-    """Error absoluto que no se supera en el 95 % de los intervalos (kW)."""
-    y, yhat = np.asarray(y, float), np.asarray(yhat, float)
-    return float(np.quantile(np.abs(y - yhat), 0.95))
 
 
 def smape(y, yhat) -> float:
@@ -178,7 +170,6 @@ def metricas(y, yhat, index=None) -> dict:
         "R2": float(1 - np.sum(err ** 2) / np.sum((y - y.mean()) ** 2)),
         "sMAPE": smape(y, yhat),
         "Precisión ±1 kW": precision_tolerancia(y, yhat),
-        "Error P95": error_p95(y, yhat),
     }
 
 
