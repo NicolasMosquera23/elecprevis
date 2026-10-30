@@ -118,6 +118,14 @@ COLOR_CARGA = {
 }
 TARIFA_DEFECTO = 1046  # COP/kWh, Electrohuila estrato 4, junio 2026 (Valora Analitik)
 
+# Máximo consumo medio de 30 min observado en toda la serie (kW). Ninguna
+# predicción puede superarlo: la regresión lineal ajusta log(1 + y), y fuera del
+# rango de los datos la exponencial crece sin control. En el pronóstico de 24 h
+# ese crecimiento se realimenta paso a paso y llega a infinito. A un paso ningún
+# modelo alcanza este límite (máximo 6,15 kW en prueba), así que no cambia las
+# métricas.
+POTENCIA_MAX_KW = 7.876
+
 # Submediciones: el dataset las da en Wh de energía activa por minuto.
 # Promedio de Wh/min en el intervalo × 60 / 1000 = potencia media en kW.
 WH_MIN_A_KW = 60 / 1000
@@ -193,7 +201,7 @@ class LinealOLS:
 
     def predict(self, X: pd.DataFrame) -> np.ndarray:
         z = (X[self.cols].to_numpy(float) - self.mean) / self.scale
-        return np.clip(np.expm1(z @ self.coef + self.intercept), 0, None)
+        return np.clip(np.expm1(z @ self.coef + self.intercept), 0, POTENCIA_MAX_KW)
 
 
 def _sigmoid(x):
@@ -330,7 +338,7 @@ def pronostico_encadenado(nombre: str, modelo, serie: pd.DataFrame, t0, pasos: i
     for _ in range(pasos):
         feats = features_de_historia(hist)
         X = feats[FEATURES].dropna()
-        pred = float(predecir(nombre, modelo, X)[-1])
+        pred = float(np.clip(predecir(nombre, modelo, X)[-1], 0, POTENCIA_MAX_KW))
         nuevo_t = hist.index[-1] + pd.Timedelta(minutes=30)
         previo = hist.loc[nuevo_t - pd.Timedelta(days=1)] if (nuevo_t - pd.Timedelta(days=1)) in hist.index else hist.iloc[-48]
         fila = previo.copy()
