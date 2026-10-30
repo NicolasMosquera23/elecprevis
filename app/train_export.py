@@ -4,19 +4,20 @@ Entrena los cuatro modelos con src/models.py y exporta lo que la app necesita.
 Uso (desde la raíz del repo, con el dataset ya procesado):
     python src/download_data.py && python src/preprocessing.py
     python app/train_export.py              # todo (la LSTM tarda varios minutos)
-    python app/train_export.py --sin-rf     # no guarda el random forest (pesa mucho)
 
 Salidas en app/artifacts/:
     power_30min.parquet         serie remuestreada (entrada de la app)
     lineal.json                 coeficientes y escalador de la regresión lineal
     xgboost.json                modelo XGBoost
     lstm.npz                    pesos de la LSTM + escalador (se evalúa en NumPy)
-    random_forest.joblib        random forest comprimido (opcional)
-    predicciones_prueba.parquet predicción a un paso de los 4 modelos en prueba
-    resultados.json             métricas, walk-forward e importancia de variables
+    random_forest.joblib        random forest liviano (core.RF_PARAMS, ≈15 MB)
+    predicciones_prueba.parquet predicción a un paso de los 4 modelos y del ensamble en prueba
+    resultados.json             métricas train/test, ensamble, walk-forward e importancia de variables
+
+Al final llama a app/export_ensamble.py, que arma el ensamble de los 4 modelos.
 
 El script no cambia el protocolo del modelo matemático: misma partición 80/20,
-mismas variables, mismos hiperparámetros y misma semilla.
+mismas variables y misma semilla. El random forest de la app usa core.RF_PARAMS.
 """
 
 import argparse
@@ -35,6 +36,7 @@ sys.path.insert(0, str(RAIZ / "app"))
 from src import features as ft  # noqa: E402
 from src import models as md  # noqa: E402
 import core  # noqa: E402
+import export_ensamble  # noqa: E402
 
 PROCESADO = RAIZ / "data" / "processed" / "power_30min.csv"
 ART = core.ART
@@ -46,7 +48,6 @@ def log(msg):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--sin-rf", action="store_true", help="no guarda el random forest")
     ap.add_argument("--epocas", type=int, default=20)
     ap.add_argument("--cortes", type=int, default=5)
     args = ap.parse_args()
@@ -88,14 +89,13 @@ def main():
     pred["Regresión lineal"] = p_lin_app
 
     # ---------------- Random forest ----------------
-    log("random forest (200 árboles)")
-    rf = md.fit_random_forest(X_tr, y_tr)
+    log(f"random forest {core.RF_PARAMS}")
+    rf = md.fit_random_forest(X_tr, y_tr, **dict(core.RF_PARAMS))
     pred["Random Forest"] = rf.predict(X_te)
     imp_rf = dict(zip(core.FEATURES, rf.feature_importances_.tolist()))
-    if not args.sin_rf:
-        import joblib
-        joblib.dump(rf, ART / "random_forest.joblib", compress=("lzma", 6))
-        log(f"  random_forest.joblib: {(ART / 'random_forest.joblib').stat().st_size / 1e6:.1f} MB")
+    import joblib
+    joblib.dump(rf, ART / "random_forest.joblib", compress=("lzma", 6))
+    log(f"  random_forest.joblib: {(ART / 'random_forest.joblib').stat().st_size / 1e6:.1f} MB")
     del rf
 
     # ---------------- XGBoost ----------------
@@ -138,18 +138,6 @@ def main():
     for m, v in metricas.items():
         log(f"  {m:17s} " + " | ".join(f"{k} {x:.4f}" for k, x in v.items()))
 
-    # ---------------- Walk-forward (3 modelos, como run_models.py) ----------------
-    wf = {}
-    if args.cortes > 0:
-        estrategias = {
-            "Regresión lineal": lambda a, b, c: md.predict_linear(md.fit_linear_regression(a, b), c),
-            "Random Forest": lambda a, b, c: md.fit_random_forest(a, b).predict(c),
-            "XGBoost": lambda a, b, c: md.fit_xgboost(a, b).predict(c),
-        }
-        for nombre, f in estrategias.items():
-            log(f"walk-forward {nombre}")
-            wf[nombre] = md.walk_forward_evaluate(f, X_tr, y_tr, n_splits=args.cortes).round(4).to_dict(orient="records")
-
     # Referencia ingenua (persistencia): ŷ_{t+1} = y_t, sin modelo.
     persistencia = serie["Global_active_power"].astype("float64").reindex(pred["origen"]).to_numpy()
     referencia = core.metricas(pred["Real"], persistencia)
@@ -160,17 +148,18 @@ def main():
                     "inicio_prueba": str(te.index[0]), "fin_prueba": str(te.index[-1])},
         "metricas_prueba": metricas,
         "referencia_persistencia": referencia,
-        "walk_forward": wf,
         "importancia": {"Random Forest": imp_rf, "XGBoost": imp_xgb,
                         "Regresión lineal": dict(zip(lin["features"], lin["coef"]))},
         "hiperparametros": {
             "Regresión lineal": "OLS sobre log(1+y), entradas estandarizadas, sin Global_intensity",
-            "Random Forest": "200 árboles, semilla 42",
+            "Random Forest": "",  # lo completa export_ensamble.py
             "XGBoost": "300 árboles, profundidad 6, η = 0,05, semilla 42",
             "LSTM": f"LSTM(64) → Dense(32, ReLU) → Dense(1); ventana 48; {args.epocas} épocas; batch 64; log(1+y)",
         },
     }
     (ART / "resultados.json").write_text(json.dumps(resultados, indent=1, ensure_ascii=False), encoding="utf-8")
+    log("ensamble, métricas de entrenamiento y walk-forward")
+    export_ensamble.main(reentrenar_rf=False, cortes=args.cortes)
     log("listo")
 
 
