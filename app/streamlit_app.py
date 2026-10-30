@@ -156,9 +156,12 @@ if pagina == "Inicio":
     )
     m = R["metricas_prueba"]
     mejor_ind = min(core.MODELOS, key=lambda k: m[k]["RMSE"])
-    c1, c2, c3, c4 = st.columns(4)
+    # La columna del modelo es más ancha porque su valor es una palabra y no un número; el detalle va en la
+    # etiqueta gris de abajo.
+    c1, c2, c3, c4 = st.columns([0.9, 1.2, 1.05, 1])
     c1.metric("Registros del dataset", fmt(R["dataset"]["filas"], 0))
-    c2.metric("Modelo principal", "Ensamble de los 4",
+    c2.metric("Modelo principal", "Ensamble", delta=f"{COMB['metodo'].lower()} de 4 modelos",
+              delta_color="off", delta_arrow="off",
               help=f"Mejor modelo individual: {mejor_ind} (R² {fmt(m[mejor_ind]['R2'], 3)})")
     c3.metric(f"{ETIQ_PREC} · ensamble", fmt(m[E][ETIQ_PREC], 1) + " %",
               delta=fmt(m[E][ETIQ_PREC] - m[mejor_ind][ETIQ_PREC], 2) + f" pp vs. {mejor_ind}")
