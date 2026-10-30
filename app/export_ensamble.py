@@ -6,17 +6,20 @@ Uso (desde la raíz del repo):
     python app/export_ensamble.py --sin-rf   # usa el random_forest.joblib que ya existe
 
 No necesita el dataset crudo ni TensorFlow: parte de app/artifacts/ (serie
-procesada, lineal.json, xgboost.json, lstm.npz). app/train_export.py lo llama al
-final, así que después de reentrenar todo no hace falta correrlo aparte.
+procesada, lineal.json, xgboost.json, lstm.npz y predicciones_validacion.parquet,
+que genera app/validacion.py). app/train_export.py y app/validacion.py lo llaman
+al final.
 
 Qué calcula:
     1. Random forest liviano (core.RF_PARAMS) y sus predicciones de prueba.
-    2. Métricas de entrenamiento y de prueba de los 4 modelos y del ensamble,
-       para revisar sobreajuste (registro de desempeño train / test).
-    3. Ensamble por promedio sobre todo el periodo de prueba.
-    4. Comparación de tres formas de combinar (promedio, ponderado, stacking):
-       los parámetros se estiman en la primera mitad de la prueba y las tres se
-       evalúan en la segunda mitad.
+    2. Decisiones en la validación (último año del entrenamiento), con las reglas
+       de core.py: forma de combinar (promedio, ponderado o stacking) y sus
+       parámetros, umbral de alerta de pico de cada modelo y adopción o no del
+       ajuste "más peso a los picos".
+    3. Ensamble en la prueba con lo decidido en validación, y métricas de
+       entrenamiento y de prueba (registro de desempeño train / test).
+    4. Casos críticos en la prueba: recall, precisión, F1 y PR-AUC de los picos,
+       antes y después de ajustar el umbral, y errores por hora del día.
     5. Correlación entre los errores de los modelos (la diversidad que hace
        funcionar el ensamble).
     6. Validación de ventana expansiva de lineal, RF, XGBoost y su promedio
@@ -44,10 +47,16 @@ import core  # noqa: E402
 
 ART = core.ART
 E = core.ENSAMBLE
+SUF = core.SUFIJO_PESO
 
 
 def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
+def pct(x: float) -> str:
+    """0.005 → '0,5 %' (coma decimal, como en la app)."""
+    return f"{100 * x:g} %".replace(".", ",")
 
 
 def predecir_lstm_lote(lstm, X: np.ndarray, desde: int, lote: int = 4000) -> np.ndarray:
@@ -58,6 +67,94 @@ def predecir_lstm_lote(lstm, X: np.ndarray, desde: int, lote: int = 4000) -> np.
         idx = np.arange(ini, fin)[:, None] + np.arange(-core.N_STEPS + 1, 1)[None, :]
         salidas.append(lstm.predict(X[idx]))
     return np.concatenate(salidas)
+
+
+# --------------------------------------------------------------------------
+# Decisiones en validación
+# --------------------------------------------------------------------------
+def ajustar_combinaciones(cal: pd.DataFrame) -> dict:
+    """Parámetros del ponderado (mínimos cuadrados no negativos, normalizados) y del stacking."""
+    M, y = cal[core.MODELOS].to_numpy(), cal["Real"].to_numpy()
+    w, _ = nnls(M, y)
+    w = w / w.sum()
+    stk = LinearRegression().fit(M, y)
+    return {
+        "Ponderado": {"pesos": dict(zip(core.MODELOS, w.tolist()))},
+        "Stacking": {"coef": dict(zip(core.MODELOS, stk.coef_.tolist())), "intercepto": float(stk.intercept_)},
+    }
+
+
+def combinaciones_fuera_de_muestra(val: pd.DataFrame) -> pd.DataFrame:
+    """
+    Predicción de las tres combinaciones en la validación sin ajustar y evaluar con
+    el mismo dato: los parámetros se estiman con una mitad del año y se aplican a la
+    otra, y luego al revés, de modo que todo el año queda evaluado.
+    """
+    mitad = len(val) // 2
+    out = pd.DataFrame(index=val.index, columns=list(core.COMBINACIONES), dtype=float)
+    for cal, ev in [(val.iloc[:mitad], val.iloc[mitad:]), (val.iloc[mitad:], val.iloc[:mitad])]:
+        params = ajustar_combinaciones(cal)
+        for metodo in core.COMBINACIONES:
+            out.loc[ev.index, metodo] = core.combinar(ev, metodo, params.get(metodo))
+    return out
+
+
+def resumen_pico(y, yhat) -> dict:
+    """RMSE y desempeño en picos con el umbral de mayor F1 (solo para validación)."""
+    u = core.mejor_umbral(y, yhat)
+    return {"RMSE": core.metricas(y, yhat)["RMSE"], **core.metricas_pico(y, yhat, u)}
+
+
+def decidir(val: pd.DataFrame) -> dict:
+    y = val["Real"]
+    oof = combinaciones_fuera_de_muestra(val)
+    comparacion = {m: core.metricas(y, val[m]) for m in ["Persistencia"] + core.MODELOS}
+    comparacion.update({f"{E} · {m}": core.metricas(y, oof[m]) for m in core.COMBINACIONES})
+
+    # Regla: menor RMSE; ante una diferencia menor que TOLERANCIA_SIMPLE, la forma más simple.
+    rmse = {m: comparacion[f"{E} · {m}"]["RMSE"] for m in core.COMBINACIONES}
+    mejor = min(rmse.values())
+    elegida = next(m for m in core.COMBINACIONES if rmse[m] <= mejor * (1 + core.TOLERANCIA_SIMPLE))
+    parametros = ajustar_combinaciones(val)
+
+    # Regla: umbral de alerta con mayor F1 en validación, uno por modelo o combinación.
+    puntajes = {"Persistencia": val["Persistencia"], **{m: val[m] for m in core.MODELOS},
+                **{f"{E} · {m}": oof[m] for m in core.COMBINACIONES}}
+    umbrales = {m: core.mejor_umbral(y, v) for m, v in puntajes.items()}
+    umbrales[E] = umbrales[f"{E} · {elegida}"]
+    pico_val = {m: core.metricas_pico(y, v, umbrales[m]) for m, v in puntajes.items()}
+
+    # Ajuste controlado: más peso a los picos en lineal, RF y XGBoost (la LSTM queda igual).
+    con_peso = ["Regresión lineal", "Random Forest", "XGBoost"]
+    val_p = val[["Real", "LSTM"]].join(val[[m + SUF for m in con_peso]].rename(columns=lambda c: c.replace(SUF, "")))
+    oof_p = combinaciones_fuera_de_muestra(val_p)[elegida]
+    experimento = {m: {"base": resumen_pico(y, val[m]), "peso": resumen_pico(y, val[m + SUF])} for m in con_peso}
+    experimento[E] = {"base": resumen_pico(y, oof[elegida]), "peso": resumen_pico(y, oof_p)}
+    b, p = experimento[E]["base"], experimento[E]["peso"]
+    adoptar = p["F1"] - b["F1"] >= core.MEJORA_F1 and p["RMSE"] <= b["RMSE"] * (1 + core.PEOR_RMSE)
+
+    log(f"validación: RMSE {', '.join(f'{m} {v:.4f}' for m, v in rmse.items())} → {elegida}")
+    log(f"  umbral de alerta del ensamble {umbrales[E]:.2f} kW | peso picos: F1 {b['F1']:.3f} → {p['F1']:.3f}, "
+        f"RMSE {b['RMSE']:.4f} → {p['RMSE']:.4f} → {'se adopta' if adoptar else 'no se adopta'}")
+    return {
+        "combinacion": {"metodo": elegida, "params": parametros.get(elegida)},
+        "parametros": parametros,
+        "comparacion": comparacion,
+        "umbrales": umbrales,
+        "pico": pico_val,
+        "experimento_peso_picos": {"peso": core.PESO_PICOS, "modelos": experimento, "adoptado": bool(adoptar)},
+    }
+
+
+def formula(comb: dict) -> str:
+    abrev = {"Regresión lineal": "lineal", "Random Forest": "RF", "XGBoost": "XGB", "LSTM": "LSTM"}
+    if comb["metodo"] == "Promedio":
+        return "ŷ_ens = (ŷ_lineal + ŷ_RF + ŷ_XGB + ŷ_LSTM) / 4"
+    if comb["metodo"] == "Ponderado":
+        w = comb["params"]["pesos"]
+        return "ŷ_ens = " + " + ".join(f"{w[m]:.3f}·ŷ_{abrev[m]}" for m in core.MODELOS)
+    c = comb["params"]
+    return f"ŷ_ens = {c['intercepto']:.3f} + " + " + ".join(f"{c['coef'][m]:.3f}·ŷ_{abrev[m]}" for m in core.MODELOS)
 
 
 def main(reentrenar_rf: bool = True, cortes: int = 5):
@@ -71,6 +168,7 @@ def main(reentrenar_rf: bool = True, cortes: int = 5):
 
     pred = pd.read_parquet(ART / "predicciones_prueba.parquet")
     assert np.allclose(pred["Real"].to_numpy(), y_te.to_numpy())
+    val = pd.read_parquet(ART / "predicciones_validacion.parquet")
     resultados = json.loads((ART / "resultados.json").read_text(encoding="utf-8"))
 
     # ---------------- 1. Random forest liviano ----------------
@@ -97,7 +195,12 @@ def main(reentrenar_rf: bool = True, cortes: int = 5):
     modelos["XGBoost"] = XGBRegressor()
     modelos["XGBoost"].load_model(ART / "xgboost.json")
 
-    # ---------------- 2. Métricas de entrenamiento ----------------
+    # ---------------- 2. Decisiones en validación ----------------
+    log("decisiones en la validación")
+    d = decidir(val)
+    comb = d["combinacion"]
+
+    # ---------------- 3. Ensamble y métricas de entrenamiento / prueba ----------------
     # La LSTM necesita 48 filas de historia: el entrenamiento se mide desde la
     # fila 48 para los cinco (mismas filas para todos).
     log("predicciones de entrenamiento")
@@ -107,8 +210,10 @@ def main(reentrenar_rf: bool = True, cortes: int = 5):
     p_tr["Random Forest"] = rf.predict(X_tr)[desde:]
     p_tr["XGBoost"] = np.clip(modelos["XGBoost"].predict(X_tr), 0, None)[desde:]
     p_tr["LSTM"] = predecir_lstm_lote(modelos["LSTM"], X_tr[core.FEATURES].to_numpy(float), desde)
-    p_tr[E] = core.ensamble_promedio(p_tr)
-    pred[E] = core.ensamble_promedio(pred)
+    p_tr[E] = core.ensamble(p_tr, comb)
+    pred[E] = core.ensamble(pred, comb)
+    # Persistencia: ŷ_{t+1} = y_t, la referencia sin modelo.
+    pred["Persistencia"] = serie["Global_active_power"].reindex(pred["origen"]).to_numpy()
     pred.to_parquet(ART / "predicciones_prueba.parquet")
 
     nombres = core.MODELOS + [E]
@@ -118,31 +223,63 @@ def main(reentrenar_rf: bool = True, cortes: int = 5):
         a, b = resultados["metricas_entrenamiento"][m], resultados["metricas_prueba"][m]
         log(f"  {m:17s} R² train {a['R2']:.4f} | test {b['R2']:.4f} | prec ±1 kW test {b['Precisión ±1 kW']:.2f} %")
 
-    # ---------------- 4. Formas de combinar ----------------
-    mitad = len(pred) // 2
-    cal, ev = pred.iloc[:mitad], pred.iloc[mitad:]
-    w, _ = nnls(cal[core.MODELOS].to_numpy(), cal["Real"].to_numpy())
-    w = w / w.sum()
-    stk = LinearRegression().fit(cal[core.MODELOS].to_numpy(), cal["Real"].to_numpy())
-    params = {
-        "Ponderado": {"pesos": dict(zip(core.MODELOS, w.tolist()))},
-        "Stacking": {"coef": dict(zip(core.MODELOS, stk.coef_.tolist())), "intercepto": float(stk.intercept_)},
-    }
-    comparacion = {m: core.metricas(ev["Real"], ev[m]) for m in core.MODELOS}
+    # Las tres formas de combinar en la prueba, con los parámetros de la validación
+    # (informativo: la elección ya se hizo en validación).
+    comparacion = {m: resultados["metricas_prueba"][m] for m in core.MODELOS}
     for metodo in core.COMBINACIONES:
-        comparacion[f"{E} · {metodo}"] = core.metricas(ev["Real"], core.combinar(ev, metodo, params.get(metodo)))
-    log("formas de combinar (segunda mitad de la prueba):")
-    for k, v in comparacion.items():
-        log(f"  {k:28s} R² {v['R2']:.4f} | MAE {v['MAE']:.4f} | prec {v['Precisión ±1 kW']:.2f} %")
+        comparacion[f"{E} · {metodo}"] = core.metricas(pred["Real"], core.combinar(pred, metodo, d["parametros"].get(metodo)))
+
+    # ---------------- 4. Casos críticos en la prueba ----------------
+    y = pred["Real"].to_numpy()
+    puntajes = {"Persistencia": pred["Persistencia"], **{m: pred[m] for m in core.MODELOS},
+                **{f"{E} · {m}": core.combinar(pred, m, d["parametros"].get(m)) for m in core.COMBINACIONES}}
+    puntajes[E] = pred[E]
+    pico_prueba = {
+        m: {"umbral_2kW": core.metricas_pico(y, v, core.UMBRAL_PICO_KW),
+            "umbral_validacion": core.metricas_pico(y, v, d["umbrales"][m])}
+        for m, v in puntajes.items()
+    }
+    real_pico, alerta = y > core.UMBRAL_PICO_KW, pred[E].to_numpy() > d["umbrales"][E]
+    hora = pd.Series(pred.index.hour, index=pred.index)
+    por_hora = pd.DataFrame({"picos": real_pico, "FN": real_pico & ~alerta, "FP": ~real_pico & alerta}).groupby(hora.to_numpy()).sum()
+    constante = float(y_tr.mean())
+    resultados["casos_criticos"] = {
+        "definicion": f"Pico: consumo real del intervalo > {core.UMBRAL_PICO_KW} kW",
+        "proporcion_prueba": float(real_pico.mean()),
+        "proporcion_validacion": float((val["Real"] > core.UMBRAL_PICO_KW).mean()),
+        "proporcion_entrenamiento": float((y_tr > core.UMBRAL_PICO_KW).mean()),
+        "constante": {"prediccion_kW": constante, **core.metricas(y, np.full_like(y, constante))},
+        "prueba": pico_prueba,
+        "errores_por_hora": {int(h): {k: int(v) for k, v in fila.items()} for h, fila in por_hora.iterrows()},
+    }
+    for m in ["Persistencia"] + nombres:
+        a, b = pico_prueba[m]["umbral_2kW"], pico_prueba[m]["umbral_validacion"]
+        log(f"  picos {m:17s} recall {a['Recall']:.3f} → {b['Recall']:.3f} | F1 {a['F1']:.3f} → {b['F1']:.3f} "
+            f"(u = {b['Umbral de alerta (kW)']:.2f}) | PR-AUC {b['PR-AUC']:.3f}")
 
     # ---------------- 5. Diversidad ----------------
     errores = pd.DataFrame({m: pred["Real"] - pred[m] for m in core.MODELOS})
 
+    resultados["validacion"] = {
+        "sub_entrenamiento": {"desde": str(X_tr.index[0]), "hasta": str(val["origen"].iloc[0] - pd.Timedelta(minutes=30)),
+                              "n": int(len(X_tr) - len(val))},
+        "validacion": {"desde": str(val["origen"].iloc[0]), "hasta": str(val["origen"].iloc[-1]), "n": int(len(val))},
+        "reglas": {
+            "combinacion": f"menor RMSE en validación; si una forma más simple queda a menos de "
+                           f"{pct(core.TOLERANCIA_SIMPLE)} del mejor RMSE, se elige la más simple",
+            "umbral": "umbral de alerta con mayor F1 de la clase pico en validación",
+            "peso_picos": f"se adopta si el F1 de validación sube al menos {core.MEJORA_F1:.2f}".replace(".", ",")
+                          + f" y el RMSE no empeora más de {pct(core.PEOR_RMSE)}",
+        },
+        "comparacion": d["comparacion"],
+        "umbrales": d["umbrales"],
+        "pico": d["pico"],
+        "experimento_peso_picos": d["experimento_peso_picos"],
+    }
     resultados["ensamble"] = {
-        "formula": "ŷ_ens = (ŷ_lineal + ŷ_RF + ŷ_XGB + ŷ_LSTM) / 4",
-        "parametros": params,
-        "calibracion": {"desde": str(cal.index[0]), "hasta": str(cal.index[-1]), "n": int(len(cal))},
-        "evaluacion": {"desde": str(ev.index[0]), "hasta": str(ev.index[-1]), "n": int(len(ev))},
+        "formula": formula(comb),
+        "combinacion": comb,
+        "parametros": d["parametros"],
         "comparacion_combinaciones": comparacion,
         "correlacion_errores": errores.corr().round(4).to_dict(),
     }
@@ -172,7 +309,11 @@ def main(reentrenar_rf: bool = True, cortes: int = 5):
         f"{core.RF_PARAMS['n_estimators']} árboles, mínimo {core.RF_PARAMS['min_samples_leaf']} "
         "observaciones por hoja, semilla 42"
     )
-    resultados["hiperparametros"][E] = "Promedio simple de los 4 modelos (sin parámetros que entrenar)"
+    resultados["hiperparametros"][E] = (
+        f"{comb['metodo']} de los 4 modelos, elegido en validación"
+        + ("" if comb["metodo"] == "Promedio" else " (parámetros estimados en el año de validación)")
+        + f"; alerta de pico si ŷ > {d['umbrales'][E]:.2f} kW"
+    )
     (ART / "resultados.json").write_text(json.dumps(resultados, indent=1, ensure_ascii=False), encoding="utf-8")
     log("listo")
 

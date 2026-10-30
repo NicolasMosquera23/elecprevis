@@ -14,7 +14,8 @@ Salidas en app/artifacts/:
     predicciones_prueba.parquet predicción a un paso de los 4 modelos y del ensamble en prueba
     resultados.json             métricas train/test, ensamble, walk-forward e importancia de variables
 
-Al final llama a app/export_ensamble.py, que arma el ensamble de los 4 modelos.
+Al final llama a app/validacion.py, que predice el año de validación y llama a
+app/export_ensamble.py, que arma el ensamble de los 4 modelos.
 
 El script no cambia el protocolo del modelo matemático: misma partición 80/20,
 mismas variables y misma semilla. El random forest de la app usa core.RF_PARAMS.
@@ -36,7 +37,7 @@ sys.path.insert(0, str(RAIZ / "app"))
 from src import features as ft  # noqa: E402
 from src import models as md  # noqa: E402
 import core  # noqa: E402
-import export_ensamble  # noqa: E402
+import validacion  # noqa: E402
 
 PROCESADO = RAIZ / "data" / "processed" / "power_30min.csv"
 ART = core.ART
@@ -158,8 +159,8 @@ def main():
         },
     }
     (ART / "resultados.json").write_text(json.dumps(resultados, indent=1, ensure_ascii=False), encoding="utf-8")
-    log("ensamble, métricas de entrenamiento y walk-forward")
-    export_ensamble.main(reentrenar_rf=False, cortes=args.cortes)
+    log("validación, ensamble, métricas de entrenamiento y walk-forward")
+    validacion.main(epocas=args.epocas, cortes=args.cortes)
     log("listo")
 
 

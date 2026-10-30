@@ -22,11 +22,13 @@ TensorFlow instalado.
 pip install -r requirements.txt
 python src/download_data.py
 python src/preprocessing.py
-python app/train_export.py        # unos 30 min en un portátil; la LSTM y el walk-forward son lo más lento
+python app/train_export.py        # unos 35 min en un portátil; la LSTM y el walk-forward son lo más lento
 ```
 
 `train_export.py` entrena con las funciones de `src/models.py` (misma semilla y misma partición
-80/20) y al final llama a `export_ensamble.py`. Exporta:
+80/20) y al final llama a `validacion.py`, que reentrena los cuatro modelos sin el último año del
+entrenamiento y lo predice (≈5 min), y este a `export_ensamble.py`, que toma con esas predicciones
+las decisiones del ensamble (ver más abajo). Exportan:
 
 | Archivo | Contenido |
 |---|---|
@@ -35,8 +37,9 @@ python app/train_export.py        # unos 30 min en un portátil; la LSTM y el wa
 | `xgboost.json` | Modelo XGBoost |
 | `lstm.npz` | Pesos de la LSTM y su escalador |
 | `random_forest.joblib` | Random forest liviano (150 árboles, ≥ 10 observaciones por hoja, ≈15 MB) |
-| `predicciones_prueba.parquet` | Predicción a un paso de los 4 modelos y del ensamble en todo el periodo de prueba |
-| `resultados.json` | Métricas de entrenamiento y prueba, ensamble, walk-forward, importancia de variables e hiperparámetros |
+| `predicciones_prueba.parquet` | Predicción a un paso de los 4 modelos, del ensamble y de la persistencia en todo el periodo de prueba |
+| `predicciones_validacion.parquet` | Predicción del año de validación con modelos entrenados sin ese año (incluye la variante «peso picos») |
+| `resultados.json` | Métricas de entrenamiento y prueba, validación, casos críticos, ensamble, walk-forward, importancia de variables e hiperparámetros |
 
 Para rehacer solo el ensamble y el random forest, sin TensorFlow ni el dataset crudo (parte de lo
 que ya está en `app/artifacts/`):
@@ -67,26 +70,54 @@ recurrente), que se equivocan en momentos distintos; al promediar, parte del err
 app muestra la correlación entre los errores de los modelos como evidencia de esa diversidad.
 
 `export_ensamble.py` compara además dos formas de combinar con parámetros, el **promedio ponderado**
-(pesos ≥ 0 que suman 1) y el **stacking** (regresión lineal sobre las cuatro predicciones). Sus
-parámetros se estiman en la primera mitad del periodo de prueba y todas se comparan en la segunda
-mitad. Se usa el promedio porque rinde prácticamente igual, no tiene parámetros que estimar y es el
-principio del random forest.
+(pesos ≥ 0 que suman 1) y el **stacking** (regresión lineal sobre las cuatro predicciones).
 
-## Funcionalidades (11)
+## Decisiones en validación, no en la prueba
+
+La forma de combinar, sus pesos y el umbral de la alerta de pico se aprenden de datos. Para que el
+periodo de prueba siga siendo un examen que nadie vio, se aprenden en una **validación**: el último
+año del 80 % de entrenamiento (13/02/2009 – 13/02/2010, 17.520 intervalos, las cuatro estaciones).
+`validacion.py` reentrena los cuatro modelos sin ese año y lo predice; `export_ensamble.py` toma
+esas predicciones y aplica reglas fijadas antes de mirar la prueba (constantes en `core.py`):
+
+| Decisión | Regla | Resultado |
+|---|---|---|
+| Forma de combinar | Menor RMSE en validación; si una más simple queda a menos de 0,5 %, la simple. Los pesos se estiman con una mitad del año y se evalúan en la otra, y al revés | **Promedio** (RMSE 0,4755, frente a 0,4912 del ponderado y 0,4842 del stacking) |
+| Umbral de alerta de pico | Mayor F1 de la clase pico en validación | **1,85 kW** |
+| Más peso a los picos al entrenar (×3) | Se adopta si el F1 sube al menos 0,01 y el RMSE no empeora más de 1 % | **No se adopta** (F1 0,657 → 0,654; RMSE +2,5 %) |
+
+Después, la prueba se evalúa una sola vez con los modelos entrenados con todo el 80 %.
+
+## Casos críticos: picos de consumo
+
+La precisión por tolerancia se infla porque la mayoría de los intervalos son de consumo bajo: predecir
+siempre la media del entrenamiento (1,11 kW) ya acierta ±1 kW en el 91,2 % de la prueba. Por eso se
+evalúa aparte el caso crítico: un **pico** es un intervalo con consumo real de más de 2 kW
+(`core.UMBRAL_PICO_KW`), el 10,1 % de la prueba. La app da **alerta de pico** cuando el ensamble
+prevé más que el umbral elegido en validación, y reporta recall, precisión, F1, PR-AUC, la matriz de
+confusión y los falsos negativos y positivos por hora (`core.metricas_pico()`).
+
+| Ensamble en prueba | Recall | Precisión | F1 | PR-AUC |
+|---|---|---|---|---|
+| Alerta si ŷ > 2 kW (sin ajustar) | 0,495 | 0,690 | 0,577 | 0,646 |
+| Alerta si ŷ > 1,85 kW (umbral de validación) | 0,617 | 0,630 | 0,623 | 0,646 |
+
+## Funcionalidades (12)
 
 | # | Sección | Funcionalidad |
 |---|---|---|
 | F1 | Histórico | Serie histórica interactiva (30 min, hora, día, semana) con indicadores de energía, potencia media, pico y costo en pesos |
 | F2 | Histórico | Patrones: mapa de calor hora × día de la semana y perfil mensual |
-| F3 | Predicción | Predicción del siguiente intervalo (30 min) con el ensamble y los 4 modelos frente al valor real |
+| F3 | Predicción | Predicción del siguiente intervalo (30 min) con el ensamble y los 4 modelos frente al valor real, con alerta de pico |
 | F4 | Comparación | Tabla de métricas del ensamble y los 4 modelos (MAE, MSE, RMSE, R², sMAPE y precisión por tolerancia) |
 | F5 | Comparación | Real vs. predicho por semana, error por hora del día y dispersión |
 | F6 | Comparación | Estabilidad por cortes de la validación de ventana expansiva |
 | F7 | Comparación | Registro de desempeño: métricas de entrenamiento frente a prueba (sobreajuste) |
-| F8 | Comparación | Ensamble: tres formas de combinar (promedio, ponderado, stacking) y correlación de errores |
-| F9 | Escenarios | Simulador de escenarios sobre el consumo medido o previsto, con desglose por grupo de carga, ahorro y costo (tarifa configurable) |
-| F10 | Modelo | Importancia de variables (RF, XGBoost) y coeficientes (lineal) |
-| F11 | Modelo | Defensa del modelo, ecuaciones clave (incluido el ensamble) y trazabilidad ecuación → código |
+| F8 | Comparación | Ensamble: tres formas de combinar comparadas en validación, forma elegida y correlación de errores |
+| F9 | Comparación | Casos críticos: recall, precisión, F1 y PR-AUC de los picos, umbral de alerta, matriz de confusión, errores por hora y ajuste «peso picos» |
+| F10 | Escenarios | Simulador de escenarios sobre el consumo medido o previsto, con desglose por grupo de carga, ahorro y costo (tarifa configurable) |
+| F11 | Modelo | Importancia de variables (RF, XGBoost) y coeficientes (lineal) |
+| F12 | Modelo | Defensa del modelo, ecuaciones clave (incluidos el ensamble y la alerta) y trazabilidad ecuación → código |
 
 Todas las secciones permiten descargar en CSV los datos que muestran.
 
