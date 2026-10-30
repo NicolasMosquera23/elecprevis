@@ -10,8 +10,6 @@ con las funciones de src/models.py. Lo único propio de la app es:
         * la LSTM se evalúa con sus pesos en NumPy, escribiendo literalmente
           las ecuaciones de las compuertas de la Sección 6.4 del modelo
           matemático.
-    - El pronóstico encadenado de 24 h (48 pasos), con la advertencia de la
-      Sección 9: el error se acumula y no se cuantifica en la formulación.
     - Los escenarios hipotéticos de reducción sobre las submediciones.
     - La precisión por tolerancia en kW que pide la rúbrica (ver TOLERANCIA_KW).
 """
@@ -120,10 +118,8 @@ TARIFA_DEFECTO = 1046  # COP/kWh, Electrohuila estrato 4, junio 2026 (Valora Ana
 
 # Máximo consumo medio de 30 min observado en toda la serie (kW). Ninguna
 # predicción puede superarlo: la regresión lineal ajusta log(1 + y), y fuera del
-# rango de los datos la exponencial crece sin control. En el pronóstico de 24 h
-# ese crecimiento se realimenta paso a paso y llega a infinito. A un paso ningún
-# modelo alcanza este límite (máximo 6,15 kW en prueba), así que no cambia las
-# métricas.
+# rango de los datos la exponencial crece sin control. A un paso ningún modelo
+# alcanza este límite (máximo 6,15 kW en prueba), así que no cambia las métricas.
 POTENCIA_MAX_KW = 7.876
 
 # Submediciones: el dataset las da en Wh de energía activa por minuto.
@@ -308,47 +304,6 @@ def cargar_predicciones() -> pd.DataFrame:
 @lru_cache(maxsize=1)
 def cargar_resultados() -> dict:
     return json.loads((ART / "resultados.json").read_text(encoding="utf-8"))
-
-
-def features_de_historia(hist: pd.DataFrame) -> pd.DataFrame:
-    """Aplica exactamente las funciones de src/features.py sobre una historia."""
-    df = ft.add_calendar_features(hist)
-    df = ft.add_lag_features(df)
-    df = ft.add_rolling_features(df)
-    return df
-
-
-# --------------------------------------------------------------------------
-# Pronóstico encadenado de 24 h
-# --------------------------------------------------------------------------
-def pronostico_encadenado(nombre: str, modelo, serie: pd.DataFrame, t0, pasos: int = 48):
-    """
-    Encadena `pasos` predicciones de un paso desde t0 (inclusive).
-
-    Supuestos (Modelo matemático §9, la predicción es a un paso):
-      - La potencia activa futura es la que predice el propio modelo.
-      - Las demás mediciones del intervalo futuro (tensión, reactiva,
-        submediciones) se toman del mismo intervalo del día anterior.
-      - La intensidad se ajusta a la potencia predicha con la relación I/P
-        observada ese mismo intervalo del día anterior (r = 0,999).
-    Devuelve una Serie con la potencia predicha en t0+30min ... t0+pasos·30min.
-    """
-    hist = serie.loc[:t0].tail(336 + N_STEPS + 2).copy()
-    salidas = {}
-    for _ in range(pasos):
-        feats = features_de_historia(hist)
-        X = feats[FEATURES].dropna()
-        pred = float(np.clip(predecir(nombre, modelo, X)[-1], 0, POTENCIA_MAX_KW))
-        nuevo_t = hist.index[-1] + pd.Timedelta(minutes=30)
-        previo = hist.loc[nuevo_t - pd.Timedelta(days=1)] if (nuevo_t - pd.Timedelta(days=1)) in hist.index else hist.iloc[-48]
-        fila = previo.copy()
-        p_prev = previo["Global_active_power"]
-        ratio = previo["Global_intensity"] / p_prev if p_prev > 0 else 4.2
-        fila["Global_active_power"] = pred
-        fila["Global_intensity"] = pred * ratio
-        hist.loc[nuevo_t] = fila
-        salidas[nuevo_t] = pred
-    return pd.Series(salidas, name=nombre)
 
 
 # --------------------------------------------------------------------------

@@ -81,15 +81,14 @@ FUNCIONALIDADES = [
     ("Histórico", "F1. Serie histórica interactiva con indicadores de energía, potencia media, pico y costo"),
     ("Histórico", "F2. Patrones de consumo: mapa de calor hora × día y perfil mensual"),
     ("Predicción", "F3. Predicción del siguiente intervalo (30 min) con el ensamble y los 4 modelos"),
-    ("Predicción", "F4. Pronóstico encadenado de 24 h con selector de modelo (incluye el ensamble)"),
-    ("Comparación", "F5. Tabla de métricas del ensamble y los 4 modelos (MAE, MSE, RMSE, R², sMAPE, precisión por tolerancia)"),
-    ("Comparación", "F6. Real vs. predicho y error por hora del día en el periodo de prueba"),
-    ("Comparación", "F7. Estabilidad por cortes de la validación de ventana expansiva"),
-    ("Comparación", "F8. Registro de desempeño: métricas de entrenamiento frente a prueba (sobreajuste)"),
-    ("Comparación", "F9. Ensamble: comparación de tres formas de combinar y diversidad de los errores"),
-    ("Escenarios", "F10. Simulador de escenarios con desglose por grupo de carga, ahorro y costo en pesos"),
-    ("Modelo", "F11. Importancia de variables y coeficientes de cada modelo"),
-    ("Modelo", "F12. Defensa del modelo, ecuaciones y trazabilidad ecuación → código"),
+    ("Comparación", "F4. Tabla de métricas del ensamble y los 4 modelos (MAE, MSE, RMSE, R², sMAPE, precisión por tolerancia)"),
+    ("Comparación", "F5. Real vs. predicho y error por hora del día en el periodo de prueba"),
+    ("Comparación", "F6. Estabilidad por cortes de la validación de ventana expansiva"),
+    ("Comparación", "F7. Registro de desempeño: métricas de entrenamiento frente a prueba (sobreajuste)"),
+    ("Comparación", "F8. Ensamble: comparación de tres formas de combinar y diversidad de los errores"),
+    ("Escenarios", "F9. Simulador de escenarios con desglose por grupo de carga, ahorro y costo en pesos"),
+    ("Modelo", "F10. Importancia de variables y coeficientes de cada modelo"),
+    ("Modelo", "F11. Defensa del modelo, ecuaciones y trazabilidad ecuación → código"),
 ]
 
 # --------------------------------------------------------------------------
@@ -218,15 +217,13 @@ elif pagina == "Histórico":
     descargar(sub, f"elecprevis_historico_{rango[0]}_{rango[1]}.csv", "Descargar datos del rango (CSV)")
 
 # ==========================================================================
-# PREDICCIÓN (F3, F4)
+# PREDICCIÓN (F3)
 # ==========================================================================
 elif pagina == "Predicción":
     st.title("Predicción")
     st.caption("Los instantes disponibles pertenecen al periodo de prueba (13/02/2010 – 26/11/2010), "
                "que ningún modelo vio durante el entrenamiento.")
-    tab1, tab2 = st.tabs(["Siguiente intervalo (30 min)", "Pronóstico 24 h"])
-
-    with tab1:  # F3
+    with st.container():  # F3
         c1, c2 = st.columns(2)
         fecha = c1.date_input("Fecha", value=pd.Timestamp("2010-06-15").date(),
                               min_value=INI_PRUEBA.date(), max_value=P["origen"].max().date())
@@ -263,55 +260,9 @@ elif pagina == "Predicción":
             fig.update_yaxes(title="kW", rangemode="tozero")
             st.plotly_chart(estilo(fig, 360), use_container_width=True)
 
-    with tab2:  # F4
-        mods = modelos()
-        disponibles = [m for m in core.MODELOS if m in mods]
-        if len(disponibles) == len(core.MODELOS):
-            disponibles = [E] + disponibles
-        c1, c2, c3 = st.columns(3)
-        fecha2 = c1.date_input("Fecha de inicio", value=pd.Timestamp("2010-06-15").date(),
-                               min_value=INI_PRUEBA.date() + pd.Timedelta(days=1),
-                               max_value=P["origen"].max().date() - pd.Timedelta(days=1), key="f2")
-        hora2 = c2.selectbox("Hora de inicio", [f"{h:02d}:00" for h in range(24)], index=0, key="h2")
-        elegidos = c3.multiselect("Modelos", disponibles, default=[E, "XGBoost"] if E in disponibles else disponibles[:2])
-        st.caption("Con el ensamble, en cada paso los cuatro modelos predicen y su promedio pasa al paso siguiente.")
-        st.warning("**Cada paso usa la predicción anterior como si fuera real**, así que el error se acumula a lo "
-                   "largo de las 24 h. El modelo matemático (§9) define la predicción a un paso; esta vista es "
-                   "ilustrativa y su error no se cuantifica en la formulación.", icon="⚠️")
-        if st.button("Calcular pronóstico de 24 h", type="primary") and elegidos:
-            t0 = pd.Timestamp(f"{fecha2} {hora2}")
-            curvas = {}
-            with st.spinner("Encadenando 48 predicciones…"):
-                for m in elegidos:
-                    curvas[m] = core.pronostico_encadenado(m, mods if m == E else mods[m], S, t0)
-            df = pd.DataFrame(curvas)
-            df.insert(0, "Real", S["Global_active_power"].reindex(df.index))
-            fig = go.Figure()
-            hist = S.loc[t0 - pd.Timedelta(hours=12):t0, "Global_active_power"]
-            fig.add_trace(go.Scatter(x=hist.index, y=hist.values, name="Histórico", mode="lines",
-                                     line=dict(color="#a8a7a2", width=2)))
-            fig.add_trace(go.Scatter(x=df.index, y=df["Real"], name="Real", mode="lines",
-                                     line=dict(color=core.COLOR_MODELO["Real"], width=2)))
-            for m in elegidos:
-                fig.add_trace(go.Scatter(x=df.index, y=df[m], name=m, mode="lines",
-                                         line=dict(color=core.COLOR_MODELO[m], width=2)))
-            fig.add_vline(x=t0, line_dash="dot", line_color="#8a8984")
-            fig.update_yaxes(title="kW", rangemode="tozero")
-            st.plotly_chart(estilo(fig, 400), use_container_width=True)
-            filas = []
-            for m in elegidos:
-                e_pred = df[m].sum() * core.HORAS_INTERVALO
-                e_real = df["Real"].sum() * core.HORAS_INTERVALO
-                filas.append({"Modelo": m, "Energía prevista 24 h (kWh)": fmt(e_pred, 2),
-                              "Energía real 24 h (kWh)": fmt(e_real, 2),
-                              "Costo previsto": cop(e_pred * tarifa),
-                              "MAE de las 48 predicciones (kW)": fmt(np.mean(np.abs(df[m] - df["Real"])), 3)})
-            st.dataframe(pd.DataFrame(filas), hide_index=True, use_container_width=True)
-            descargar(df, f"elecprevis_pronostico24h_{fecha2}.csv")
-
 
 # ==========================================================================
-# COMPARACIÓN DE MODELOS (F5, F6, F7, F8, F9)
+# COMPARACIÓN DE MODELOS (F4, F5, F6, F7, F8)
 # ==========================================================================
 elif pagina == "Comparación de modelos":
     st.title("Comparación: los cuatro modelos y su ensamble")
@@ -357,7 +308,7 @@ elif pagina == "Comparación de modelos":
             "Sección 8 del modelo matemático. La precisión por tolerancia las complementa, no las reemplaza."
         )
 
-    # F6
+    # F5
     st.subheader("Real vs. predicho")
     c1, c2 = st.columns([3, 1])
     dsel = c1.date_input("Semana desde", value=pd.Timestamp("2010-08-02").date(),
@@ -395,7 +346,7 @@ elif pagina == "Comparación de modelos":
     figs.update_yaxes(title="Predicho (kW)")
     c2.plotly_chart(estilo(figs, 340, leyenda=False).update_layout(hovermode="closest"), use_container_width=True)
 
-    # F7
+    # F6
     if R.get("walk_forward"):
         st.subheader("Estabilidad: validación de ventana expansiva (5 cortes)")
         st.caption("Cada corte entrena con todo lo anterior y evalúa el bloque siguiente, dentro del 80 % de "
@@ -420,7 +371,7 @@ elif pagina == "Comparación de modelos":
         resumen.columns = ["RMSE media", "RMSE desv.", "R² media", "R² desv."]
         st.dataframe(resumen.map(lambda v: fmt(v, 4)), use_container_width=True)
 
-    # F8
+    # F7
     if R.get("metricas_entrenamiento"):
         st.subheader("Registro de desempeño: entrenamiento frente a prueba")
         st.caption("Si un modelo es mucho mejor en entrenamiento que en prueba, memorizó los datos en vez de "
@@ -439,7 +390,7 @@ elif pagina == "Comparación de modelos":
             })
         st.dataframe(pd.DataFrame(filas), hide_index=True, use_container_width=True)
 
-    # F9
+    # F8
     if ENS:
         st.subheader("¿Cómo se combinan los cuatro modelos?")
         st.markdown(
@@ -493,7 +444,7 @@ elif pagina == "Comparación de modelos":
     descargar(P, "elecprevis_predicciones_prueba.csv", "Descargar predicciones del periodo de prueba (CSV)")
 
 # ==========================================================================
-# ESCENARIOS (F10)
+# ESCENARIOS (F9)
 # ==========================================================================
 elif pagina == "Escenarios de eficiencia":
     st.title("Escenarios de eficiencia energética")
@@ -507,7 +458,7 @@ elif pagina == "Escenarios de eficiencia":
         st.stop()
     sub = S.loc[pd.Timestamp(rango[0]):pd.Timestamp(rango[1]) + pd.Timedelta(hours=23, minutes=30)]
 
-    # F10 (desglose)
+    # F9 (desglose)
     d = core.desglose_kw(sub)
     energia = d.sum() * core.HORAS_INTERVALO
     nombres = {**core.SUBMEDICIONES, "Resto": "Resto del hogar (no submedido)"}
@@ -534,7 +485,7 @@ elif pagina == "Escenarios de eficiencia":
     st.markdown("**Perfil horario por grupo de carga**")
     st.plotly_chart(estilo(figa, 340), use_container_width=True)
 
-    # F10 (simulador)
+    # F9 (simulador)
     st.subheader("Simulador de reducción")
     base = st.radio(
         "Consumo de partida",
@@ -568,7 +519,7 @@ elif pagina == "Escenarios de eficiencia":
     e_esc = esc["Escenario"].sum() * core.HORAS_INTERVALO
     ahorro = e_real - e_esc
 
-    # F10 (costo y ahorro)
+    # F9 (costo y ahorro)
     dias = max(len(sub) / 48, 1)
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("Energía en el escenario", fmt(e_esc, 0) + " kWh", delta="−" + fmt(ahorro, 0) + " kWh", delta_color="inverse")
@@ -587,7 +538,7 @@ elif pagina == "Escenarios de eficiencia":
     descargar(esc, f"elecprevis_escenario_{rango[0]}_{rango[1]}.csv", "Descargar escenario (CSV)")
 
 # ==========================================================================
-# MODELO (F11, F12)
+# MODELO (F10, F11)
 # ==========================================================================
 elif pagina == "Modelo":
     st.title("El modelo detrás de la app")
@@ -620,7 +571,7 @@ elif pagina == "Modelo":
     )
     st.latex(r"\mathbb{E}\!\left[\Big(\tfrac{1}{4}\textstyle\sum_i e_i\Big)^2\right] \;\le\; \tfrac{1}{4}\textstyle\sum_i \mathbb{E}\left[e_i^2\right]")
 
-    # F12 (defensa)
+    # F11 (defensa)
     st.subheader("Defensa del modelo")
     m = R["metricas_prueba"]
     mtr = R.get("metricas_entrenamiento", {})
@@ -652,14 +603,14 @@ elif pagina == "Modelo":
          f"error que no se supera en el 95 % de los intervalos es {fmt(m[E]['Error P95'], 2)} kW, y el error es "
          f"mayor entre las 19:00 y las 21:00, la hora de la cena (ver *Comparación*)."),
         ("6. Limitaciones actuales",
-         "Datos de una sola vivienda en Francia (2006–2010); el pronóstico de 24 h acumula error paso a paso; los "
+         "Datos de una sola vivienda en Francia (2006–2010); la predicción es solo a 30 minutos; los "
          "escenarios de ahorro son hipotéticos y no causales; y la mejora del ensamble sobre el mejor modelo es "
          "moderada, porque Random Forest y XGBoost se equivocan casi igual. Su principal aporte es estabilidad."),
     ]
     for pregunta, respuesta in defensa:
         st.markdown(f"**{pregunta}**  \n{respuesta}")
 
-    # F11
+    # F10
     st.subheader("¿Qué variables usa cada modelo?")
     imp = R["importancia"]
     cmod = st.selectbox("Modelo", ["XGBoost", "Random Forest", "Regresión lineal"])
@@ -677,7 +628,7 @@ elif pagina == "Modelo":
     st.dataframe(pd.DataFrame(R["hiperparametros"].items(), columns=["Modelo", "Configuración"]),
                  hide_index=True, use_container_width=True)
 
-    # F12 (trazabilidad)
+    # F11 (trazabilidad)
     st.subheader("Trazabilidad: de la ecuación al código")
     traz = [
         ("Remuestreo a 30 min", "preprocessing.resample_30min()"),
@@ -695,7 +646,6 @@ elif pagina == "Modelo":
         ("Ponderado y stacking (comparación)", "app/core.combinar()"),
         ("Métricas MAE, MSE, RMSE, R², sMAPE", "app/core.metricas()"),
         ("Escenarios de reducción", "app/core.simular_escenario()"),
-        ("Pronóstico encadenado 24 h", "app/core.pronostico_encadenado()"),
     ]
     st.dataframe(pd.DataFrame(traz, columns=["Concepto del modelo matemático", "Implementación"]),
                  hide_index=True, use_container_width=True)
