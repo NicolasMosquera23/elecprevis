@@ -75,7 +75,7 @@ LINEAR_EXCLUDE = ("Global_intensity",)
 
 
 def fit_linear_regression(X_train, y_train, log_target: bool = True,
-                          exclude=LINEAR_EXCLUDE):
+                          exclude=LINEAR_EXCLUDE, sample_weight=None):
     """
     Ajusta la regresión lineal sobre log(1 + y) cuando log_target es True.
 
@@ -83,11 +83,14 @@ def fit_linear_regression(X_train, y_train, log_target: bool = True,
     justifica por la asimetría del objetivo; al invertir la predicción con expm1
     las métricas vuelven a kW y siguen siendo comparables con las de los otros
     modelos. Las columnas de `exclude` se retiran por multicolinealidad.
+    `sample_weight` permite que unas observaciones pesen más en el ajuste (por
+    ejemplo, los picos de consumo).
     """
     cols = [c for c in X_train.columns if c not in set(exclude)]
     scaler = StandardScaler().fit(X_train[cols])
     y_fit = np.log1p(y_train) if log_target else y_train
-    model = LinearRegression().fit(scaler.transform(X_train[cols]), y_fit)
+    model = LinearRegression().fit(scaler.transform(X_train[cols]), y_fit,
+                                   sample_weight=sample_weight)
     return model, scaler, log_target, cols
 
 
@@ -98,18 +101,18 @@ def predict_linear(bundle, X) -> np.ndarray:
     return np.expm1(pred) if log_target else pred
 
 
-def fit_random_forest(X_train, y_train, **kwargs):
+def fit_random_forest(X_train, y_train, sample_weight=None, **kwargs):
     model = RandomForestRegressor(
         n_estimators=kwargs.pop("n_estimators", 200),
         random_state=SEED,
         n_jobs=-1,
         **kwargs,
     )
-    model.fit(X_train, y_train)
+    model.fit(X_train, y_train, sample_weight=sample_weight)
     return model
 
 
-def fit_xgboost(X_train, y_train, **kwargs):
+def fit_xgboost(X_train, y_train, sample_weight=None, **kwargs):
     from xgboost import XGBRegressor
 
     model = XGBRegressor(
@@ -120,7 +123,7 @@ def fit_xgboost(X_train, y_train, **kwargs):
         n_jobs=-1,
         **kwargs,
     )
-    model.fit(X_train, y_train)
+    model.fit(X_train, y_train, sample_weight=sample_weight)
     return model
 
 
