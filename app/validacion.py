@@ -7,8 +7,8 @@ Uso (desde la raíz del repo; necesita TensorFlow por la LSTM):
 
 Por qué existe. Las decisiones de la integración (cómo combinar los cuatro modelos,
 con qué pesos y desde qué consumo previsto se da la alerta de pico) se aprenden de
-datos. Si se aprenden con el periodo de prueba, la prueba deja de ser un examen que
-nadie vio. Por eso el 80 % de entrenamiento se divide en dos:
+datos. Si se aprenden con el periodo de prueba, la evaluación final deja de ser
+independiente de esas decisiones. Por eso el 80 % de entrenamiento se divide en dos:
 
     sub-entrenamiento  todo menos el último año (≈ dic 2006 – feb 2009)
     validación         el último año del entrenamiento (≈ feb 2009 – feb 2010),
@@ -18,7 +18,7 @@ nadie vio. Por eso el 80 % de entrenamiento se divide en dos:
        hiperparámetros de la app.
     2. Se predice la validación y se guarda en predicciones_validacion.parquet.
     3. export_ensamble.py toma esas predicciones, elige la combinación y los
-       umbrales con las reglas fijadas en core.py y los aplica una sola vez a la
+       umbrales con las reglas fijadas en core.py y los aplica sin cambios a la
        prueba, que se predice con los modelos entrenados con todo el 80 %.
 
 También entrena la variante "peso picos" de la regresión lineal, el random forest

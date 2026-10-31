@@ -23,6 +23,7 @@ pip install -r requirements.txt
 python src/download_data.py
 python src/preprocessing.py
 python app/train_export.py        # unos 35 min en un portátil; la LSTM y el walk-forward son lo más lento
+python app/comprobaciones.py      # segundos; comprobaciones de robustez (ver más abajo)
 ```
 
 `train_export.py` entrena con las funciones de `src/models.py` (misma semilla y misma partición
@@ -40,6 +41,7 @@ las decisiones del ensamble (ver más abajo). Exportan:
 | `predicciones_prueba.parquet` | Predicción a un paso de los 4 modelos, del ensamble y de la persistencia en todo el periodo de prueba |
 | `predicciones_validacion.parquet` | Predicción del año de validación con modelos entrenados sin ese año (incluye la variante «peso picos») |
 | `resultados.json` | Métricas de entrenamiento y prueba, validación, casos críticos, ensamble, walk-forward, importancia de variables e hiperparámetros |
+| `comprobaciones.json` | Formas de combinar comparadas en orden temporal y métricas de prueba sin consumos rellenados (`comprobaciones.py`) |
 
 Para rehacer solo el ensamble y el random forest, sin TensorFlow ni el dataset crudo (parte de lo
 que ya está en `app/artifacts/`):
@@ -75,10 +77,10 @@ app muestra la correlación entre los errores de los modelos como evidencia de e
 ## Decisiones en validación, no en la prueba
 
 La forma de combinar, sus pesos y el umbral de la alerta de pico se aprenden de datos. Para que el
-periodo de prueba siga siendo un examen que nadie vio, se aprenden en una **validación**: el último
+periodo de prueba no intervenga en esas decisiones, se aprenden en una **validación**: el último
 año del 80 % de entrenamiento (13/02/2009 – 13/02/2010, 17.520 intervalos, las cuatro estaciones).
 `validacion.py` reentrena los cuatro modelos sin ese año y lo predice; `export_ensamble.py` toma
-esas predicciones y aplica reglas fijadas antes de mirar la prueba (constantes en `core.py`):
+esas predicciones y aplica reglas que usan la validación y no la prueba (constantes en `core.py`):
 
 | Decisión | Regla | Resultado |
 |---|---|---|
@@ -86,7 +88,22 @@ esas predicciones y aplica reglas fijadas antes de mirar la prueba (constantes e
 | Umbral de alerta de pico | Mayor F1 de la clase pico en validación | **1,85 kW** |
 | Más peso a los picos al entrenar (×3) | Se adopta si el F1 sube al menos 0,01 y el RMSE no empeora más de 1 % | **No se adopta** (F1 0,657 → 0,654; RMSE +2,5 %) |
 
-Después, la prueba se evalúa una sola vez con los modelos entrenados con todo el 80 %.
+Después, la prueba se evalúa con los modelos entrenados con todo el 80 %. La prueba no está intacta:
+una versión anterior estimaba con ella los pesos del ensamble, y con ella se evaluó y se retiró el
+pronóstico a 24 horas. El procedimiento actual no la usa para decidir.
+
+### Comprobaciones de robustez (`comprobaciones.py`)
+
+No cambian ninguna decisión; guardan sus resultados en `comprobaciones.json`, que la app muestra.
+
+- **Formas de combinar en orden temporal.** En el sentido segunda → primera mitad de la tabla de
+  arriba, los pesos salen de datos posteriores a los evaluados, lo que no reproduce un pronóstico.
+  Estimando solo con la primera mitad y evaluando las tres formas en la segunda (8.760 intervalos),
+  el promedio también gana: RMSE 0,5105 kW, frente a 0,5304 del stacking y 0,5409 del ponderado.
+- **Prueba sin consumos rellenados.** Con los datos minuto a minuto, 480 intervalos de prueba están
+  totalmente rellenados por la imputación, 13 parcialmente y 1 tiene solo 3 minutos medidos. Con los
+  13.274 intervalos completos y medidos, el ensamble obtiene RMSE 0,4350 kW y precisión ±1 kW de
+  96,07 % (frente a 0,4285 y 96,20 % con todos). Necesita el dataset crudo (`src/download_data.py`).
 
 ## Casos críticos: picos de consumo
 
