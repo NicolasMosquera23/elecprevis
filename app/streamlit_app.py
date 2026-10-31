@@ -179,7 +179,8 @@ if pagina == "Inicio":
         f"4. **Ensamble:** la predicción final es {FORMA_ENSAMBLE}. Como los modelos son de tipos distintos, "
         "se equivocan en momentos distintos y al combinarlos parte del error se compensa.\n"
         "5. **Validación:** la forma de combinar y el umbral de la alerta de pico se eligieron con el último año "
-        "del entrenamiento, con modelos que no lo vieron. El periodo de prueba solo se usó para medir, una vez.\n"
+        "del entrenamiento, con modelos que no lo vieron. Esas decisiones no usan el periodo de prueba, que se "
+        "reserva para medir.\n"
         f"6. **Alerta de pico:** si el ensamble prevé más de {fmt(U_ALERTA, 2)} kW, avisa que viene un pico "
         f"(consumo de más de {PICO} kW).\n"
         "7. **Escenarios:** reducciones porcentuales supuestas sobre cada grupo de carga. Son hipotéticos: "
@@ -264,7 +265,9 @@ elif pagina == "Predicción":
         fecha = c1.date_input("Fecha", value=pd.Timestamp("2010-06-15").date(),
                               min_value=INI_PRUEBA.date(), max_value=P["origen"].max().date())
         horas = [f"{h:02d}:{m:02d}" for h in range(24) for m in (0, 30)]
-        hora = c2.selectbox("Hora actual (t)", horas, index=horas.index("19:00"))
+        hora = c2.selectbox("Intervalo de origen (t)", horas, index=horas.index("19:00"),
+                            help="Inicio del intervalo de 30 minutos cuyas mediciones ya se conocen: el promedio "
+                                 "de 19:00 a 19:30 se conoce a las 19:30, y con él se prevé de 19:30 a 20:00.")
         t = pd.Timestamp(f"{fecha} {hora}")
         fila = P[P["origen"] == t]
         if fila.empty:
@@ -272,8 +275,10 @@ elif pagina == "Predicción":
         else:
             fila = fila.iloc[0]
             obj = t + pd.Timedelta(minutes=30)
-            st.markdown(f"Con la información disponible hasta **{t:%d/%m/%Y %H:%M}**, el consumo medio "
-                        f"previsto para el intervalo **{obj:%H:%M}–{obj + pd.Timedelta(minutes=30):%H:%M}** es:")
+            # La fila t es el promedio de [t, t + 30 min): se conoce al cerrar el intervalo, en t + 30 min.
+            st.markdown(f"Con las mediciones del {t:%d/%m/%Y} de **{t:%H:%M} a {obj:%H:%M}**, disponibles a las "
+                        f"**{obj:%H:%M}**, el consumo medio previsto para el intervalo "
+                        f"**{obj:%H:%M}–{obj + pd.Timedelta(minutes=30):%H:%M}** es:")
             cols = st.columns(6)
             cols[0].metric("Real (medido)", fmt(fila["Real"], 3) + " kW")
             for c, m in zip(cols[1:], TODOS):
@@ -346,7 +351,7 @@ elif pagina == "Comparación de modelos":
         f"individual, **{mejor_ind}**: R² {fmt(m[mejor_ind]['R2'], 3)} → **{fmt(m[E]['R2'], 3)}**, MAE "
         f"{fmt(m[mejor_ind]['MAE'], 3)} → **{fmt(m[E]['MAE'], 3)} kW** y precisión ±{TOL} kW "
         f"{fmt(m[mejor_ind][ETIQ_PREC], 2)} % → **{fmt(m[E][ETIQ_PREC], 2)} %**. La mejora es moderada: lo que más "
-        "gana el ensamble es estabilidad. Cómo le va con los picos está en *Casos críticos*, más abajo."
+        "gana el ensamble es no depender de que un solo modelo tenga un buen periodo. Cómo le va con los picos está en *Casos críticos*, más abajo."
     )
     with st.expander("¿Por qué precisión por tolerancia y no TP / (TP + FP)? ¿Y por qué no basta?"):
         ref_txt = (f" Como referencia, predecir que en la próxima media hora se consume lo mismo que ahora, "
@@ -433,8 +438,9 @@ elif pagina == "Comparación de modelos":
     # F7
     if R.get("metricas_entrenamiento"):
         st.subheader("Registro de desempeño: entrenamiento frente a prueba")
-        st.caption("Si un modelo es mucho mejor en entrenamiento que en prueba, memorizó los datos en vez de "
-                   "aprender el patrón (sobreajuste). El entrenamiento se mide desde el intervalo 48 para que "
+        st.caption("Si un modelo es mucho mejor en entrenamiento que en prueba, es señal de que memorizó parte "
+                   "de los datos en vez de aprender el patrón (sobreajuste); otra parte de la diferencia viene de "
+                   "que la prueba es un periodo distinto. El entrenamiento se mide desde el intervalo 48 para que "
                    "la LSTM tenga su ventana de 24 h.")
         mtr = R["metricas_entrenamiento"]
         filas = []
@@ -635,7 +641,9 @@ elif pagina == "Escenarios de eficiencia":
         "Consumo de partida",
         ["Medido", "Previsto por el ensamble"], horizontal=True,
         help="«Previsto por el ensamble» parte de la predicción a 30 min del ensamble en lugar del consumo "
-             "medido. Solo existe en el periodo de prueba (13/02/2010 – 26/11/2010).",
+             "medido. Solo existe en el periodo de prueba (13/02/2010 – 26/11/2010). Las reducciones se "
+             "calculan con las submediciones medidas de ese mismo intervalo, que no se conocen de antemano: "
+             "es un análisis retrospectivo, no un pronóstico del ahorro.",
     )
     c1, c2, c3 = st.columns(3)
     r1 = c1.slider("Cocina: reducción (%)", 0, 100, 10, 5)
@@ -758,7 +766,8 @@ elif pagina == "Modelo":
             f"{fmt(CC['prueba'][E]['umbral_validacion']['F1'], 3)} y PR-AUC "
             f"{fmt(CC['prueba'][E]['umbral_validacion']['PR-AUC'], 3)}." if CC else "")),
         ("5. Errores principales",
-         f"Los picos se subestiman: son encendidos repentinos (horno, calentador) que el pasado no anticipa. "
+         f"Los picos se subestiman; probablemente son encendidos repentinos (horno, calentador) que el pasado no "
+         f"anticipa. "
          f"Cuando el consumo real supera {PICO} kW, el ensamble se queda corto en promedio "
          f"{fmt(-(P.loc[P['Real'] > core.UMBRAL_PICO_KW, E] - P.loc[P['Real'] > core.UMBRAL_PICO_KW, 'Real']).mean(), 2)} kW. "
          "Los picos que se escapan son sobre todo los de la mañana, cuando el consumo salta desde el valle de la "
@@ -767,7 +776,9 @@ elif pagina == "Modelo":
         ("6. Limitaciones actuales",
          "Datos de una sola vivienda en Francia (2006–2010); la predicción es solo a 30 minutos; los "
          "escenarios de ahorro son hipotéticos y no causales; y la mejora del ensamble sobre el mejor modelo es "
-         "moderada, porque Random Forest y XGBoost se equivocan casi igual. Su principal aporte es estabilidad."),
+         "moderada, porque Random Forest y XGBoost se equivocan casi igual. Su principal aporte es no depender "
+         "de un solo modelo: en la validación por cortes, su versión de tres modelos tuvo el mejor promedio, "
+         "aunque la regresión lineal varió menos entre cortes."),
     ]
     for pregunta, respuesta in defensa:
         st.markdown(f"**{pregunta}**  \n{respuesta}")
