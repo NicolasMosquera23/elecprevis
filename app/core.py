@@ -182,7 +182,7 @@ N_VALIDACION = 365 * 48
 PESO_PICOS = 3.0
 SUFIJO_PESO = " (peso picos)"
 
-# Reglas de decisión, fijadas antes de mirar la prueba:
+# Reglas de decisión; usan la validación, no la prueba:
 #   combinación: la de menor RMSE en validación; si una más simple queda a
 #                menos de TOLERANCIA_SIMPLE del mejor RMSE, se elige la simple.
 #   umbral:      el de mayor F1 de la clase pico en validación.
@@ -369,6 +369,12 @@ def cargar_predicciones() -> pd.DataFrame:
 @lru_cache(maxsize=1)
 def cargar_resultados() -> dict:
     return json.loads((ART / "resultados.json").read_text(encoding="utf-8"))
+
+
+def cargar_comprobaciones() -> dict:
+    """Comprobaciones de app/comprobaciones.py; vacío si todavía no se han calculado."""
+    ruta = ART / "comprobaciones.json"
+    return json.loads(ruta.read_text(encoding="utf-8")) if ruta.exists() else {}
 
 
 # --------------------------------------------------------------------------

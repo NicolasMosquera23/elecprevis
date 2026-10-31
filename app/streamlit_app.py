@@ -76,6 +76,11 @@ def resultados(version):
     return core.cargar_resultados()
 
 
+@st.cache_data(show_spinner=False, max_entries=1)
+def comprobaciones(version):
+    return core.cargar_comprobaciones()
+
+
 @st.cache_resource(show_spinner="Cargando modelos…", max_entries=1)
 def modelos(version):
     return core.cargar_modelos()
@@ -85,6 +90,7 @@ VERSION = version_artefactos()
 S = serie(VERSION)
 P = predicciones(VERSION)
 R = resultados(VERSION)
+CHK = comprobaciones(VERSION)  # comprobaciones de robustez (app/comprobaciones.py)
 INI_PRUEBA = pd.Timestamp(R["dataset"]["inicio_prueba"])
 
 ETIQ_PREC = "Precisión ±1 kW"
@@ -310,7 +316,7 @@ elif pagina == "Predicción":
                            + " Ver *Comparación de modelos → Casos críticos*.")
             ventana = S.loc[t - pd.Timedelta(hours=12):t, "Global_active_power"]
             fig = go.Figure()
-            fig.add_trace(go.Scatter(x=ventana.index, y=ventana.values, mode="lines", name="Histórico (hasta t)",
+            fig.add_trace(go.Scatter(x=ventana.index, y=ventana.values, mode="lines", name="Medido (hasta el intervalo t)",
                                      line=dict(color=core.COLOR_MODELO["Real"], width=2)))
             fig.add_trace(go.Scatter(x=[obj], y=[fila["Real"]], mode="markers", name="Real en t+1",
                                      marker=dict(color=core.COLOR_MODELO["Real"], size=11, symbol="circle-open", line=dict(width=2))))
@@ -351,8 +357,18 @@ elif pagina == "Comparación de modelos":
         f"individual, **{mejor_ind}**: R² {fmt(m[mejor_ind]['R2'], 3)} → **{fmt(m[E]['R2'], 3)}**, MAE "
         f"{fmt(m[mejor_ind]['MAE'], 3)} → **{fmt(m[E]['MAE'], 3)} kW** y precisión ±{TOL} kW "
         f"{fmt(m[mejor_ind][ETIQ_PREC], 2)} % → **{fmt(m[E][ETIQ_PREC], 2)} %**. La mejora es moderada: lo que más "
-        "gana el ensamble es no depender de que un solo modelo tenga un buen periodo. Cómo le va con los picos está en *Casos críticos*, más abajo."
+        "gana el ensamble es no depender de que un solo modelo tenga un buen periodo. Cómo le va con los picos "
+        "está en *Casos críticos*, más abajo."
     )
+    sr = CHK.get("prueba_sin_rellenos")
+    if sr:
+        st.caption(
+            f"En {fmt(sr['totalmente_rellenados'] + sr['parcialmente_rellenados'], 0)} intervalos de prueba el "
+            f"consumo real tiene minutos rellenados por la imputación ({fmt(sr['totalmente_rellenados'], 0)} por "
+            f"completo), y {fmt(sr['incompletos'], 0)} tiene menos de 30 minutos medidos. Solo con los "
+            f"{fmt(sr['completos_y_medidos'], 0)} intervalos completos y medidos, el ensamble obtiene RMSE "
+            f"{fmt(sr['completos'][E]['RMSE'], 4)} kW y precisión ±{TOL} kW {fmt(sr['completos'][E][ETIQ_PREC], 2)} %."
+        )
     with st.expander("¿Por qué precisión por tolerancia y no TP / (TP + FP)? ¿Y por qué no basta?"):
         ref_txt = (f" Como referencia, predecir que en la próxima media hora se consume lo mismo que ahora, "
                    f"sin ningún modelo, alcanza {fmt(REF['Precisión ±1 kW'], 1)} % con la misma tolerancia."
@@ -469,11 +485,21 @@ elif pagina == "Comparación de modelos":
             f"**La forma y sus pesos se eligen en la validación**, no en la prueba: el último año del "
             f"entrenamiento ({vv['desde'][:10]} – {vv['hasta'][:10]}, {fmt(vv['n'], 0)} intervalos). Para eso los "
             "cuatro modelos se reentrenaron sin ese año, así que sus errores en él son honestos. Dentro del año, "
-            "los pesos se estiman con una mitad y se evalúan en la otra, y al revés. Regla, fijada antes de mirar "
-            f"la prueba: {VAL['reglas']['combinacion']}."
+            "los pesos se estiman con una mitad y se evalúan en la otra, y al revés. Regla (usa la validación, no "
+            f"la prueba): {VAL['reglas']['combinacion']}."
         )
         orden = [f"{E} · {k}" for k in core.COMBINACIONES] + core.MODELOS + ["Persistencia"]
         st.dataframe(tabla_metricas(VAL["comparacion"], orden), use_container_width=True)
+        ot = CHK.get("orden_temporal")
+        if ot:
+            st.caption(
+                "En el sentido segunda → primera mitad, los pesos salen de datos posteriores a los evaluados, lo "
+                "que no reproduce un pronóstico. Comprobación en orden temporal: con los parámetros estimados solo "
+                f"en la primera mitad y las tres formas evaluadas en la segunda ({fmt(ot['n_evaluacion'], 0)} "
+                "intervalos), RMSE "
+                + ", ".join(f"{k.lower()} {fmt(v['RMSE'], 4)}" for k, v in ot["combinaciones"].items())
+                + f" kW: también gana el {ot['elegida'].lower()}."
+            )
         pes = ENS["parametros"]["Ponderado"]["pesos"]
         stk = ENS["parametros"]["Stacking"]
         c1, c2 = st.columns(2)
@@ -562,12 +588,13 @@ elif pagina == "Comparación de modelos":
         h_fn, h_fp = int(eh["FN"].idxmax()), int(eh["FP"].idxmax())
         st.markdown(
             f"- Los **picos que se escapan** (falsos negativos) se concentran a las **{h_fn:02d}:00**: "
-            f"{eh.loc[h_fn, 'FN']} de {eh.loc[h_fn, 'picos']} picos sin alerta a esa hora. El consumo salta desde el "
-            "valle de la noche y el pasado reciente no lo anticipa.\n"
-            f"- Las **falsas alarmas** se concentran en la noche (máximo a las **{h_fp:02d}:00**): el modelo aprendió "
-            "que a esa hora suele haber pico y avisa aunque ese día no ocurra.\n"
-            "- Para corregirlo haría falta información que hoy no está en las variables: ocupación del hogar, "
-            "clima (el calentador y el aire acondicionado son la carga más grande) y festivos."
+            f"{eh.loc[h_fn, 'FN']} de {eh.loc[h_fn, 'picos']} picos sin alerta a esa hora, probablemente porque el "
+            "consumo salta desde el valle de la noche y el pasado reciente no lo anticipa.\n"
+            f"- Las **falsas alarmas** se concentran en la noche (máximo a las **{h_fp:02d}:00**): es probable que el "
+            "modelo haya aprendido que a esa hora suele haber pico y avise aunque ese día no ocurra.\n"
+            "- Hipótesis no comprobada: información que hoy no está en las variables, como la ocupación del hogar, "
+            "el clima (el calentador y el aire acondicionado son la carga más grande) y los festivos, podría "
+            "reducir estos errores."
         )
 
         if VAL.get("experimento_peso_picos"):
@@ -817,6 +844,7 @@ elif pagina == "Modelo":
         ("LSTM (64 unidades, ventana 48)", "models.fit_lstm() → app/core.LSTMNumpy"),
         ("Validación: último año del entrenamiento", "app/validacion.py → predicciones_validacion.parquet"),
         ("Elección de la combinación y del umbral de alerta", "app/export_ensamble.decidir()"),
+        ("Comprobaciones: orden temporal y prueba sin rellenos", "app/comprobaciones.py → comprobaciones.json"),
         (f"Ensamble ({COMB['metodo'].lower()} de los 4 modelos)", "app/core.ensamble() · app/core.combinar()"),
         ("Métricas MAE, MSE, RMSE, R², sMAPE", "app/core.metricas()"),
         ("Casos críticos: recall, precisión, F1, PR-AUC", "app/core.metricas_pico()"),
