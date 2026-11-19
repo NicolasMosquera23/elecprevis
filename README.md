@@ -14,7 +14,8 @@ ensamble por promedio, con el mismo principio del random forest, para predecir e
 consumo eléctrico residencial a 30 minutos, usando el dataset
 [Individual Household Electric Power Consumption](https://archive.ics.uci.edu/dataset/235/individual+household+electric+power+consumption)
 del repositorio UCI, y simula escenarios de eficiencia energética a partir de las submediciones
-de carga (cocina, lavandería, calentamiento de agua).
+de carga (cocina, lavandería, calentamiento de agua). La aplicación también recibe mediciones nuevas
+(8 días, en el formato de UCI) y predice en el momento la siguiente media hora con los cuatro modelos.
 
 Ver `docs/Entregable_1.pdf` para la propuesta completa, el estado del arte y el marco teórico.
 

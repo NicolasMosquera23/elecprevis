@@ -378,6 +378,99 @@ def cargar_comprobaciones() -> dict:
 
 
 # --------------------------------------------------------------------------
+# Pronóstico con datos nuevos
+# --------------------------------------------------------------------------
+# Con mediciones que no están en el dataset se repite el mismo camino del
+# proyecto: forward fill y promedio por intervalo de 30 min (src/preprocessing.py),
+# variables de src/features.py y los cuatro modelos ejecutados en el momento.
+# La LSTM necesita 48 pasos y cada paso necesita el rezago de 7 días (336), así
+# que hacen falta al menos 384 intervalos de 30 min: 8 días de mediciones.
+MEDICIONES = FEATURES[:7]
+HISTORIA_MINIMA = 336 + N_STEPS
+EJEMPLO = Path(__file__).resolve().parent / "datos_ejemplo" / "mediciones_ejemplo.txt"
+
+
+def leer_mediciones(contenido: bytes) -> pd.DataFrame:
+    """
+    Lee un archivo de mediciones: el formato de UCI (Date;Time;... minuto a minuto,
+    con «?» en los minutos sin dato) o un CSV con una columna datetime y las siete
+    mediciones a cualquier resolución.
+    """
+    import io
+
+    texto = contenido.decode("utf-8-sig")
+    sep = ";" if ";" in texto.split("\n", 1)[0] else ","
+    df = pd.read_csv(io.StringIO(texto), sep=sep, na_values=["?"], low_memory=False)
+    df.columns = [c.strip() for c in df.columns]
+    try:
+        if {"Date", "Time"} <= set(df.columns):
+            tiempo = pd.to_datetime(df["Date"] + " " + df["Time"], format="%d/%m/%Y %H:%M:%S")
+        elif "datetime" in df.columns:
+            tiempo = pd.to_datetime(df["datetime"])
+        else:
+            raise ValueError("El archivo necesita las columnas Date y Time (formato de UCI) o una columna datetime.")
+    except (TypeError, ValueError) as err:
+        if "necesita las columnas" in str(err):
+            raise
+        raise ValueError("Las fechas no tienen el formato esperado: en el formato de UCI, Date es dd/mm/aaaa y Time "
+                         "es hh:mm:ss; en el CSV, la columna datetime debe ser una fecha y hora.") from err
+    faltan = [c for c in MEDICIONES if c not in df.columns]
+    if faltan:
+        raise ValueError("Faltan columnas: " + ", ".join(faltan) + ".")
+    med = df[MEDICIONES].apply(pd.to_numeric, errors="coerce")
+    med.index = pd.DatetimeIndex(tiempo, name="datetime")
+    return med.sort_index()
+
+
+def serie_desde_mediciones(med: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+    """
+    Serie de 30 min lista para los modelos, con el mismo tratamiento del proyecto.
+    Si las mediciones son por minuto, el último intervalo solo se usa si tiene sus
+    30 minutos (un intervalo a medias no es comparable con los del entrenamiento).
+    """
+    from src import preprocessing as pp
+
+    med = med[~med.index.duplicated(keep="last")]
+    sin_dato = int(med.isna().any(axis=1).sum())
+    med = pp.impute_missing(med.copy()).dropna()  # los minutos sin dato del inicio no tienen valor anterior
+    por_minuto = len(med) > 1 and med.index.to_series().diff().median() <= pd.Timedelta(minutes=1)
+    serie = pp.resample_30min(med)
+    vacios = int(serie.isna().any(axis=1).sum())
+    serie = serie.ffill()  # intervalos sin ningún registro: el último valor conocido, como en la imputación
+    incompleto = None
+    if por_minuto and len(serie):
+        minutos = med.index.to_series().resample("30min").size()
+        if minutos.iloc[-1] < 30:
+            incompleto = (serie.index[-1], int(minutos.iloc[-1]))
+            serie = serie.iloc[:-1]
+    info = {"desde": med.index[0], "hasta": med.index[-1], "intervalos": len(serie), "por_minuto": bool(por_minuto),
+            "minutos_sin_dato": sin_dato, "intervalos_vacios": vacios, "ultimo_incompleto": incompleto}
+    return serie.astype("float64"), info
+
+
+def pronosticar(serie: pd.DataFrame, modelos: dict, comb: dict | None = None) -> dict:
+    """
+    Predice el intervalo de 30 min que sigue al último de la serie con los cuatro
+    modelos y el ensamble. La fila t es el promedio de [t, t + 30 min): se conoce
+    al cerrar el intervalo y se predice [t + 30 min, t + 60 min).
+    """
+    if len(serie) < HISTORIA_MINIMA:
+        raise ValueError(f"Hacen falta al menos {HISTORIA_MINIMA} intervalos de 30 min (8 días) de mediciones; "
+                         f"el archivo tiene {len(serie)}.")
+    faltan = [m for m in MODELOS if m not in modelos]
+    if faltan:
+        raise ValueError("No se encontraron los modelos: " + ", ".join(faltan) + ".")
+    df = ft.add_rolling_features(ft.add_lag_features(ft.add_calendar_features(serie)))
+    X = df[FEATURES].iloc[-N_STEPS:]
+    if X.isna().any().any():
+        raise ValueError("Las últimas 24 horas tienen valores vacíos; revisa el archivo.")
+    preds = {m: float(predecir(m, modelos[m], X)[-1]) for m in MODELOS}
+    origen = X.index[-1]
+    return {"origen": origen, "objetivo": origen + pd.Timedelta(minutes=30), "predicciones": preds,
+            "ensamble": float(ensamble({m: [v] for m, v in preds.items()}, comb)[0])}
+
+
+# --------------------------------------------------------------------------
 # Escenarios de eficiencia (hipotéticos, sin causalidad: §9)
 # --------------------------------------------------------------------------
 def desglose_kw(serie: pd.DataFrame) -> pd.DataFrame:
