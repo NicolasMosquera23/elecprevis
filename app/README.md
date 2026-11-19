@@ -3,7 +3,8 @@
 Aplicación web en Streamlit que implementa el modelo matemático del proyecto: muestra el
 histórico de consumo, predice el siguiente intervalo de 30 minutos con un **ensamble de los cuatro
 modelos** (y con cada modelo por separado), compara su desempeño y simula escenarios hipotéticos de
-eficiencia sobre las submediciones.
+eficiencia sobre las submediciones. Con mediciones nuevas de los últimos 8 días, ejecuta los cuatro
+modelos en el momento y predice la siguiente media hora (ver *Pronóstico con datos nuevos*).
 
 ## Cómo correrla
 
@@ -119,7 +120,7 @@ confusión y los falsos negativos y positivos por hora (`core.metricas_pico()`).
 | Alerta si ŷ > 2 kW (sin ajustar) | 0,495 | 0,690 | 0,577 | 0,646 |
 | Alerta si ŷ > 1,85 kW (umbral de validación) | 0,617 | 0,630 | 0,623 | 0,646 |
 
-## Funcionalidades (12)
+## Funcionalidades (13)
 
 | # | Sección | Funcionalidad |
 |---|---|---|
@@ -135,8 +136,31 @@ confusión y los falsos negativos y positivos por hora (`core.metricas_pico()`).
 | F10 | Escenarios | Simulador de escenarios sobre el consumo medido o previsto, con desglose por grupo de carga, ahorro y costo (tarifa configurable) |
 | F11 | Modelo | Importancia de variables (RF, XGBoost) y coeficientes (lineal) |
 | F12 | Modelo | Defensa del modelo, ecuaciones clave (incluidos el ensamble y la alerta) y trazabilidad ecuación → código |
+| F13 | Pronóstico | Pronóstico con datos nuevos: se suben mediciones o se edita la actual, y los 4 modelos predicen en el momento la siguiente media hora, con alerta de pico |
 
 Todas las secciones permiten descargar en CSV los datos que muestran.
+
+## Pronóstico con datos nuevos (F13)
+
+Las secciones F3 a F12 muestran la evaluación del proyecto, calculada antes con los modelos guardados.
+F13 ejecuta los cuatro modelos en el momento con mediciones nuevas (`core.leer_mediciones`,
+`core.serie_desde_mediciones` y `core.pronosticar`):
+
+1. Lee el archivo en el formato de UCI (`Date;Time;...` minuto a minuto, con `?` en los minutos sin
+   dato) o un CSV con una columna `datetime` y las siete mediciones.
+2. Aplica el tratamiento de `src/preprocessing.py`: forward fill y promedio por intervalo de 30 min.
+   Si el último intervalo no tiene sus 30 minutos, no se usa.
+3. Arma las 19 variables con `src/features.py` y predice con los cuatro modelos y el ensamble el
+   intervalo que sigue al último medido, con la alerta de pico.
+
+Hacen falta **8 días** de mediciones (384 intervalos de 30 min): la LSTM usa las últimas 24 horas y
+cada paso necesita el consumo de 7 días antes. La medición del intervalo actual se puede editar en
+pantalla para simular otra situación.
+
+`app/datos_ejemplo/mediciones_ejemplo.txt` trae 9 días reales del dataset de UCI (licencia CC BY 4.0),
+del 06/06/2010 19:00 al 15/06/2010 19:29, en su formato original. Con ese ejemplo, la predicción en
+vivo para el intervalo de 19:30 a 20:00 da 0,836 kW, la misma que guardó la evaluación en
+`predicciones_prueba.parquet`; el consumo real fue 0,966 kW.
 
 ## Precisión
 

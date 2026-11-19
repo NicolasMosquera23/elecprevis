@@ -86,6 +86,11 @@ def modelos(version):
     return core.cargar_modelos()
 
 
+@st.cache_data(show_spinner="Procesando las mediciones…", max_entries=3)
+def preparar_mediciones(contenido: bytes):
+    return core.serie_desde_mediciones(core.leer_mediciones(contenido))
+
+
 VERSION = version_artefactos()
 S = serie(VERSION)
 P = predicciones(VERSION)
@@ -112,6 +117,22 @@ FORMA_ENSAMBLE = {
     "Stacking": "una regresión lineal (stacking) sobre las cuatro predicciones, ajustada en la validación",
 }[COMB["metodo"]]
 
+
+def cuenta_ensamble(valores) -> tuple[str, str]:
+    """La operación del ensamble con la predicción de cada modelo, para mostrarla en pantalla."""
+    if COMB["metodo"] == "Promedio":
+        return (f"({' + '.join(fmt(valores[m], 3) for m in core.MODELOS)}) / 4",
+                "cada modelo aporta un voto, como los árboles de un random forest")
+    if COMB["metodo"] == "Ponderado":
+        w = COMB["params"]["pesos"]
+        return (" + ".join(f"{fmt(w[m], 3)} × {fmt(valores[m], 3)}" for m in core.MODELOS),
+                "cada modelo vota con el peso que se eligió en la validación (en el orden lineal, RF, XGBoost, LSTM)")
+    c = COMB["params"]
+    return (fmt(c["intercepto"], 3) + " + " + " + ".join(f"{fmt(c['coef'][m], 3)} × {fmt(valores[m], 3)}"
+                                                        for m in core.MODELOS),
+            "coeficientes del stacking ajustados en la validación")
+
+
 FUNCIONALIDADES = [
     ("Histórico", "F1. Serie histórica interactiva con indicadores de energía, potencia media, pico y costo"),
     ("Histórico", "F2. Patrones de consumo: mapa de calor hora × día y perfil mensual"),
@@ -125,6 +146,8 @@ FUNCIONALIDADES = [
     ("Escenarios", "F10. Simulador de escenarios con desglose por grupo de carga, ahorro y costo en pesos"),
     ("Modelo", "F11. Importancia de variables y coeficientes de cada modelo"),
     ("Modelo", "F12. Defensa del modelo, ecuaciones y trazabilidad ecuación → código"),
+    ("Pronóstico", "F13. Pronóstico con datos nuevos: se suben mediciones (o se edita la actual) y los 4 modelos "
+                   "predicen en el momento la siguiente media hora, con alerta de pico"),
 ]
 
 # --------------------------------------------------------------------------
@@ -135,7 +158,8 @@ with st.sidebar:
     st.caption("Previsión del consumo eléctrico residencial y escenarios de eficiencia energética")
     pagina = st.radio(
         "Sección",
-        ["Inicio", "Histórico", "Predicción", "Comparación de modelos", "Escenarios de eficiencia", "Modelo"],
+        ["Inicio", "Histórico", "Predicción", "Pronóstico con datos nuevos", "Comparación de modelos",
+         "Escenarios de eficiencia", "Modelo"],
         label_visibility="collapsed",
     )
     st.divider()
@@ -291,18 +315,7 @@ elif pagina == "Predicción":
                 err = fila[m] - fila["Real"]
                 c.metric(f"**{m}**" if m == E else m, fmt(fila[m], 3) + " kW",
                          delta=("+" if err >= 0 else "") + fmt(err, 3) + " kW", delta_color="off")
-            if COMB["metodo"] == "Promedio":
-                cuenta = f"({' + '.join(fmt(fila[m], 3) for m in core.MODELOS)}) / 4"
-                idea = "cada modelo aporta un voto, como los árboles de un random forest"
-            elif COMB["metodo"] == "Ponderado":
-                w = COMB["params"]["pesos"]
-                cuenta = " + ".join(f"{fmt(w[m], 3)} × {fmt(fila[m], 3)}" for m in core.MODELOS)
-                idea = "cada modelo vota con el peso que se eligió en la validación (en el orden lineal, RF, XGBoost, LSTM)"
-            else:
-                c = COMB["params"]
-                cuenta = fmt(c["intercepto"], 3) + " + " + " + ".join(
-                    f"{fmt(c['coef'][m], 3)} × {fmt(fila[m], 3)}" for m in core.MODELOS)
-                idea = "coeficientes del stacking ajustados en la validación"
+            cuenta, idea = cuenta_ensamble(fila)
             st.caption(f"Ensamble = {cuenta} = {fmt(fila[E], 3)} kW: {idea}.")
             alerta, fue_pico = fila[E] > U_ALERTA, fila["Real"] > core.UMBRAL_PICO_KW
             a1, a2 = st.columns(2)
@@ -327,6 +340,122 @@ elif pagina == "Predicción":
                                                      line=dict(color="white", width=2))))
             fig.update_yaxes(title="kW", rangemode="tozero")
             st.plotly_chart(estilo(fig, 360), use_container_width=True)
+
+
+# ==========================================================================
+# PRONÓSTICO CON DATOS NUEVOS (F13)
+# ==========================================================================
+elif pagina == "Pronóstico con datos nuevos":
+    st.title("Pronóstico con datos nuevos")
+    st.caption("Aquí los cuatro modelos se ejecutan en el momento. Con las mediciones de los últimos 8 días, la app "
+               "repite el tratamiento del proyecto (relleno de los minutos sin dato, promedio cada 30 minutos y las "
+               "19 variables) y predice la media hora que sigue a la última medida.")
+    fuente = st.radio("Mediciones", ["Ejemplo incluido", "Subir un archivo"], horizontal=True)
+    if fuente == "Ejemplo incluido":
+        contenido = core.EJEMPLO.read_bytes()
+        c1, c2 = st.columns([2, 1])
+        c1.caption("Ejemplo: 9 días de mediciones reales, minuto a minuto, tomadas del dataset de UCI "
+                   "(06/06/2010 19:00 – 15/06/2010 19:29), en su formato original.")
+        c2.download_button("Descargar el ejemplo", contenido, file_name="mediciones_ejemplo.txt", mime="text/plain")
+    else:
+        archivo = st.file_uploader("Archivo de mediciones (.txt o .csv)", type=["txt", "csv"])
+        with st.expander("¿Qué formato debe tener el archivo?"):
+            st.markdown(
+                f"- **Al menos 8 días** de mediciones ({core.HISTORIA_MINIMA} intervalos de 30 min): la LSTM mira "
+                "las últimas 24 horas y cada una necesita el consumo de 7 días antes.\n"
+                "- **Formato de UCI**, minuto a minuto: columnas `Date;Time;Global_active_power;"
+                "Global_reactive_power;Voltage;Global_intensity;Sub_metering_1;Sub_metering_2;Sub_metering_3`, "
+                "fecha `dd/mm/aaaa`, separadas por `;` y con `?` en los minutos sin dato. Es el formato del "
+                "ejemplo, que puedes descargar como plantilla.\n"
+                "- O un **CSV** con una columna `datetime` y esas siete mediciones, a cualquier resolución.\n"
+                "- Unidades: potencias en kW, tensión en V, intensidad en A y submediciones en Wh por minuto."
+            )
+        if archivo is None:
+            st.info("Sube un archivo para continuar, o usa el ejemplo incluido.")
+            st.stop()
+        contenido = archivo.getvalue()
+    try:
+        serie, info = preparar_mediciones(contenido)
+    except ValueError as err:
+        st.error(f"No se pudo leer el archivo: {err}")
+        st.stop()
+    notas = []
+    if info["minutos_sin_dato"]:
+        notas.append(f"{fmt(info['minutos_sin_dato'], 0)} minuto(s) sin dato, rellenados con la última medición")
+    if info["intervalos_vacios"]:
+        notas.append(f"{fmt(info['intervalos_vacios'], 0)} intervalo(s) sin registros, rellenados igual")
+    if info["ultimo_incompleto"]:
+        t_inc, n_inc = info["ultimo_incompleto"]
+        notas.append(f"el intervalo de las {t_inc:%H:%M} solo tiene {n_inc} minutos y no se usa")
+    st.markdown(f"Mediciones del **{info['desde']:%d/%m/%Y %H:%M}** al **{info['hasta']:%d/%m/%Y %H:%M}**: "
+                f"{fmt(info['intervalos'], 0)} intervalos de 30 min."
+                + (" " + "; ".join(notas).capitalize() + "." if notas else ""))
+    if info["intervalos"] < core.HISTORIA_MINIMA:
+        st.error(f"Hacen falta al menos {core.HISTORIA_MINIMA} intervalos de 30 min (8 días) de mediciones.")
+        st.stop()
+
+    t = serie.index[-1]
+    obj = t + pd.Timedelta(minutes=30)
+    st.markdown(f"**Medición del intervalo actual: {t:%d/%m/%Y}, de {t:%H:%M} a {obj:%H:%M}.** "
+                "Puedes cambiar sus valores para simular otra situación.")
+    nombres = {
+        "Global_active_power": "Potencia activa (kW)", "Global_reactive_power": "Potencia reactiva (kW)",
+        "Voltage": "Tensión (V)", "Global_intensity": "Intensidad (A)", "Sub_metering_1": "Cocina (Wh/min)",
+        "Sub_metering_2": "Lavandería (Wh/min)", "Sub_metering_3": "Calentador y A.A. (Wh/min)",
+    }
+    actual = pd.DataFrame({"Medición": [nombres[c] for c in core.MEDICIONES],
+                           "Valor": serie.loc[t, core.MEDICIONES].to_numpy(float).round(3)})
+    c1, c2 = st.columns([3, 2])
+    editada = c1.data_editor(actual, hide_index=True, use_container_width=True, num_rows="fixed",
+                             disabled=["Medición"],
+                             column_config={"Valor": st.column_config.NumberColumn("Valor", min_value=0.0,
+                                                                                   format="%.3f")})
+    c2.caption("Doble clic en un valor para cambiarlo. En los datos reales la potencia activa y la intensidad van "
+               "juntas (I ≈ 1.000 × P / V): si cambias una, cambia también la otra.")
+    nueva = serie.copy()
+    nueva.loc[t, core.MEDICIONES] = editada["Valor"].to_numpy(float)
+    cambiada = not np.allclose(editada["Valor"].to_numpy(float), actual["Valor"].to_numpy(float), atol=5e-4)
+    if not cambiada:
+        nueva = serie  # sin cambios se usan los valores exactos, sin el redondeo de la tabla
+    try:
+        res = core.pronosticar(nueva, modelos(VERSION), COMB)
+    except ValueError as err:
+        st.error(str(err))
+        st.stop()
+
+    pred = {**res["predicciones"], E: res["ensamble"]}
+    st.markdown(f"Consumo medio previsto para el **{obj:%d/%m/%Y}, de {obj:%H:%M} a "
+                f"{obj + pd.Timedelta(minutes=30):%H:%M}**:")
+    alerta = pred[E] > U_ALERTA
+    c1, c2 = st.columns(2)
+    c1.metric(f"**{E}**", fmt(pred[E], 3) + " kW")
+    c2.metric("Alerta de pico", "Sí" if alerta else "No",
+              help=f"Se da cuando el ensamble prevé más de {fmt(U_ALERTA, 2)} kW (umbral elegido en validación); "
+                   f"un pico es un consumo de más de {PICO} kW.")
+    for c, m in zip(st.columns(4), core.MODELOS):
+        c.metric(m, fmt(pred[m], 3) + " kW")
+    cuenta, idea = cuenta_ensamble(pred)
+    st.caption(f"Ensamble = {cuenta} = {fmt(pred[E], 3)} kW: {idea}.")
+    if cambiada:
+        st.caption("Con la medición modificada no hay un valor real con qué comparar: es una simulación.")
+    elif obj in P.index:
+        st.info(f"Este intervalo está en el periodo de prueba del proyecto. La evaluación guardada predijo "
+                f"{fmt(P.loc[obj, E], 3)} kW con los mismos modelos, y el consumo real fue "
+                f"{fmt(P.loc[obj, 'Real'], 3)} kW.")
+    elif obj in S.index:
+        st.info(f"Según el dataset, el consumo real de ese intervalo fue {fmt(S.loc[obj, 'Global_active_power'], 3)} kW.")
+
+    ventana = nueva.loc[t - pd.Timedelta(hours=12):t, "Global_active_power"]
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=ventana.index, y=ventana.values, mode="lines", name="Medido (hasta el intervalo t)",
+                             line=dict(color=core.COLOR_MODELO["Real"], width=2)))
+    for m in TODOS:
+        fig.add_trace(go.Scatter(x=[obj], y=[pred[m]], mode="markers", name=m,
+                                 marker=dict(color=core.COLOR_MODELO[m], size=14 if m == E else 10,
+                                             symbol="diamond" if m == E else "circle",
+                                             line=dict(color="white", width=2))))
+    fig.update_yaxes(title="kW", rangemode="tozero")
+    st.plotly_chart(estilo(fig, 360), use_container_width=True)
 
 
 # ==========================================================================
@@ -845,6 +974,7 @@ elif pagina == "Modelo":
         ("Validación: último año del entrenamiento", "app/validacion.py → predicciones_validacion.parquet"),
         ("Elección de la combinación y del umbral de alerta", "app/export_ensamble.decidir()"),
         ("Comprobaciones: orden temporal y prueba sin rellenos", "app/comprobaciones.py → comprobaciones.json"),
+        ("Pronóstico con datos nuevos", "app/core.leer_mediciones() → serie_desde_mediciones() → pronosticar()"),
         (f"Ensamble ({COMB['metodo'].lower()} de los 4 modelos)", "app/core.ensamble() · app/core.combinar()"),
         ("Métricas MAE, MSE, RMSE, R², sMAPE", "app/core.metricas()"),
         ("Casos críticos: recall, precisión, F1, PR-AUC", "app/core.metricas_pico()"),
